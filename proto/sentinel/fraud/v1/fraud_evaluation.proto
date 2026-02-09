@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package sentinel.fraud.v1;
+
+// Service for real-time fraud evaluation via gRPC.
+service FraudEvaluationService {
+  // Evaluate a single transaction for fraud risk.
+  rpc Evaluate (EvaluateRequest) returns (EvaluateResponse);
+}
+
+message EvaluateRequest {
+  string external_id      = 1;
+  string customer_id      = 2;
+  double amount            = 3;
+  string currency          = 4;
+  string transaction_type  = 5;
+  string channel           = 6;
+
+  // Optional enrichment fields
+  string merchant_id       = 7;
+  string merchant_name     = 8;
+  string merchant_category = 9;
+  string location_country  = 10;
+  string location_city     = 11;
+  string device_fingerprint = 12;
+  string ip_address        = 13;
+}
+
+message TriggeredRule {
+  string code        = 1;
+  string name        = 2;
+  string category    = 3;
+  string severity    = 4;
+  int32  score       = 5;
+  string description = 6;
+}
+
+message EvaluateResponse {
+  string transaction_id            = 1;
+  string external_id               = 2;
+  int32  risk_score                = 3;
+  string decision                  = 4;
+  string decision_tier             = 5;
+  string decision_tier_description = 6;
+  repeated TriggeredRule triggered_rules = 7;
+  double processing_time_ms        = 8;
+  bool   alert_created             = 9;
+  string alert_id                  = 10;
+}
