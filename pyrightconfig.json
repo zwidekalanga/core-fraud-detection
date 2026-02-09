@@ -1,0 +1,15 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard",
+  "exclude": ["app/grpc/generated/", "alembic/", ".venv/"],
+  "reportCallInDefaultInitializer": false,
+  "reportUnannotatedClassAttribute": false,
+  "reportUnusedCallResult": false,
+  "reportMissingTypeStubs": false,
+  "reportUnusedFunction": false,
+  "reportImplicitOverride": false,
+  "reportPrivateUsage": false,
+  "reportUntypedFunctionDecorator": false,
+}
