@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import DateTime, Index, Numeric, String
+from sqlalchemy import CheckConstraint, DateTime, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,7 +61,11 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
     # Additional data
     extra_data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
-    __table_args__ = (Index("idx_txn_customer_time", "customer_id", "transaction_time"),)
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_txn_amount_positive"),
+        Index("idx_txn_customer_time", "customer_id", "transaction_time"),
+        Index("idx_txn_merchant_time", "merchant_id", "transaction_time"),
+    )
 
     def __repr__(self) -> str:
         return f"<Transaction {self.external_id}: {self.amount} {self.currency}>"

@@ -1,14 +1,16 @@
 """Pydantic schemas for fraud rules."""
+
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.rule import RuleCategory, Severity
 
 
 class RuleCondition(BaseModel):
     """Rule condition schema (pylitmus format)."""
+
     field: str | None = None
     operator: str | None = None
     value: Any = None
@@ -20,10 +22,24 @@ class RuleCondition(BaseModel):
     def validate_operator(cls, v: str | None) -> str | None:
         """Validate operator is supported by pylitmus."""
         valid_operators = {
-            "equals", "not_equals", "greater_than", "greater_than_or_equal",
-            "less_than", "less_than_or_equal", "between", "in", "not_in",
-            "contains", "starts_with", "ends_with", "matches_regex",
-            "is_null", "is_not_null", "within_days", "before", "after",
+            "equals",
+            "not_equals",
+            "greater_than",
+            "greater_than_or_equal",
+            "less_than",
+            "less_than_or_equal",
+            "between",
+            "in",
+            "not_in",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "matches_regex",
+            "is_null",
+            "is_not_null",
+            "within_days",
+            "before",
+            "after",
         }
         if v is not None and v not in valid_operators:
             raise ValueError(f"Invalid operator: {v}. Must be one of {valid_operators}")
@@ -32,6 +48,7 @@ class RuleCondition(BaseModel):
 
 class RuleCreate(BaseModel):
     """Schema for creating a new rule."""
+
     code: str = Field(..., min_length=1, max_length=50, pattern=r"^[A-Z]{2,4}_\d{3}$")
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
@@ -43,9 +60,18 @@ class RuleCreate(BaseModel):
     effective_from: datetime | None = None
     effective_to: datetime | None = None
 
+    @model_validator(mode="after")
+    def validate_effective_dates(self) -> "RuleCreate":
+        """Ensure effective_to is after effective_from when both are set."""
+        if self.effective_from and self.effective_to:
+            if self.effective_to <= self.effective_from:
+                raise ValueError("effective_to must be after effective_from")
+        return self
+
 
 class RuleUpdate(BaseModel):
     """Schema for updating a rule."""
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
     category: RuleCategory | None = None
@@ -56,9 +82,18 @@ class RuleUpdate(BaseModel):
     effective_from: datetime | None = None
     effective_to: datetime | None = None
 
+    @model_validator(mode="after")
+    def validate_effective_dates(self) -> "RuleUpdate":
+        """Ensure effective_to is after effective_from when both are set."""
+        if self.effective_from and self.effective_to:
+            if self.effective_to <= self.effective_from:
+                raise ValueError("effective_to must be after effective_from")
+        return self
+
 
 class RuleResponse(BaseModel):
     """Schema for rule response."""
+
     code: str
     name: str
     description: str | None
@@ -77,6 +112,7 @@ class RuleResponse(BaseModel):
 
 class RuleListResponse(BaseModel):
     """Schema for paginated rule list."""
+
     items: list[RuleResponse]
     total: int
     page: int

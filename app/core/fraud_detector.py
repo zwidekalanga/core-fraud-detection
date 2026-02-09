@@ -1,5 +1,13 @@
-"""Fraud detection service using pylitmus rules engine."""
+"""Fraud detection service using pylitmus rules engine.
 
+Concurrency model: FraudDetector instances are NOT thread-safe. In the Kafka
+consumer a single detector is kept warm and reused across sequential messages
+(no concurrent access). The gRPC path creates a fresh detector per request.
+If rule reloading is added at runtime, callers must serialise access via an
+external ``asyncio.Lock``.
+"""
+
+import logging
 from typing import Any
 
 from pylitmus import DecisionTier, create_engine
@@ -10,6 +18,13 @@ from pylitmus.types import Severity as PylitmusSeverity
 from app.config import Settings
 from app.models.alert import Decision
 from app.models.rule import FraudRule
+
+logger = logging.getLogger(__name__)
+
+
+class EvaluationError(Exception):
+    """Raised when the pylitmus rules engine fails to evaluate a transaction."""
+
 
 # Define decision tiers for fraud assessment
 DECISION_TIERS = [
@@ -79,8 +94,18 @@ class FraudDetector:
 
         Returns:
             AssessmentResult from pylitmus with score, decision tier, and triggered rules
+
+        Raises:
+            EvaluationError: If the rules engine fails unexpectedly.
         """
-        return self._engine.evaluate(data)
+        try:
+            return self._engine.evaluate(data)
+        except Exception as exc:
+            logger.exception(
+                "Rules engine evaluation failed for external_id=%s",
+                data.get("external_id", "unknown"),
+            )
+            raise EvaluationError(f"Failed to evaluate transaction: {exc}") from exc
 
     def get_decision(self, assessment: AssessmentResult) -> Decision:
         """Convert pylitmus decision tier to our Decision enum."""

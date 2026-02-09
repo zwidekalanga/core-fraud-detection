@@ -3,7 +3,6 @@
 from app.models.alert import AlertStatus, Decision, FraudAlert
 from app.models.base import Base
 from app.models.config import CONFIG_DEFAULTS, SystemConfig
-from app.models.notification import Notification, NotificationStatus, NotificationType
 from app.models.rule import FraudRule, RuleCategory, Severity
 from app.models.transaction import Channel, Transaction
 from app.models.user import UserRole
@@ -15,7 +14,6 @@ __all__ = [
     "FraudRule",
     "Transaction",
     "FraudAlert",
-    "Notification",
     "SystemConfig",
     # Config
     "CONFIG_DEFAULTS",
@@ -25,7 +23,5 @@ __all__ = [
     "Channel",
     "AlertStatus",
     "Decision",
-    "NotificationType",
-    "NotificationStatus",
     "UserRole",
 ]

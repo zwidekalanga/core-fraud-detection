@@ -1,192 +1,281 @@
-"""Integration tests for fraud.inbound.kafka — the Kafka consumer pipeline.
+"""Integration tests for fraud.inbound.kafka — the TransactionConsumer.
 
-These tests verify the TransactionConsumer processes messages correctly
-by publishing to Kafka and checking the results in the database.
-They run against the live devstack containers.
+These tests verify the consumer's message processing pipeline (parse →
+idempotency → store → evaluate → alert) with Kafka, Postgres, and Redis
+mocked so that all tests run in isolation without devstack.
 """
-import asyncio
+
 import json
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
-from aiokafka import AIOKafkaProducer
-from redis.asyncio import Redis
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.consumers.transaction_consumer import TransactionConsumer
+from app.models.alert import AlertStatus, Decision
 from tests.conftest import make_high_risk_transaction, make_transaction
 
 pytestmark = pytest.mark.asyncio
 
-TOPIC = "transactions.raw"
-DLQ_TOPIC = "transactions.dlq"
-
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Helpers
 # ---------------------------------------------------------------------------
 
-@pytest_asyncio.fixture()
-async def kafka_producer():
-    """Create a Kafka producer for publishing test messages."""
-    settings = get_settings()
-    producer = AIOKafkaProducer(
-        bootstrap_servers=settings.kafka_bootstrap_servers,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+_NOW = datetime.now(UTC)
+
+
+def _kafka_message(data: dict | bytes, topic: str = "transactions.raw") -> SimpleNamespace:
+    """Build a fake Kafka message that looks like an aiokafka ConsumerRecord."""
+    if isinstance(data, bytes):
+        value = data.decode("utf-8", errors="replace")
+    else:
+        value = json.dumps(data)
+    return SimpleNamespace(
+        topic=topic,
+        partition=0,
+        offset=1,
+        timestamp=int(_NOW.timestamp() * 1000),
+        value=value,
     )
-    await producer.start()
-    yield producer
-    await producer.stop()
 
 
-async def _wait_for_transaction(db_session: AsyncSession, external_id: str, timeout: float = 15.0) -> dict | None:
-    """Poll the database until the transaction appears or timeout."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        result = await db_session.execute(
-            text("SELECT id, external_id FROM transactions WHERE external_id = :eid"),
-            {"eid": external_id},
-        )
-        row = result.fetchone()
-        if row:
-            return {"id": str(row[0]), "external_id": row[1]}
-        await asyncio.sleep(0.5)
-        # Refresh session to see committed data from consumer
-        await db_session.rollback()
-    return None
+def _make_transaction_model(external_id: str, **overrides):
+    """Minimal transaction ORM-like object returned by TransactionRepository.upsert."""
+    data = {
+        "id": str(uuid.uuid4()),
+        "external_id": external_id,
+        "customer_id": str(uuid.uuid4()),
+        "amount": Decimal("150.00"),
+        "currency": "ZAR",
+        "transaction_type": "purchase",
+        "channel": "online",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
 
 
-async def _wait_for_alert(db_session: AsyncSession, external_id: str, timeout: float = 15.0) -> dict | None:
-    """Poll the database until an alert linked to the transaction appears."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        result = await db_session.execute(
-            text("""
-                SELECT a.id, a.risk_score, a.decision, a.status, a.triggered_rules
-                FROM fraud_alerts a
-                JOIN transactions t ON a.transaction_id = t.id
-                WHERE t.external_id = :eid
-            """),
-            {"eid": external_id},
-        )
-        row = result.fetchone()
-        if row:
-            return {
-                "id": str(row[0]),
-                "risk_score": row[1],
-                "decision": row[2],
-                "status": row[3],
-                "triggered_rules": row[4],
-            }
-        await asyncio.sleep(0.5)
-        await db_session.rollback()
-    return None
+def _make_alert_model(transaction_id: str, risk_score: int, decision: str, **overrides):
+    """Minimal alert ORM-like object returned by AlertRepository.create."""
+    data = {
+        "id": str(uuid.uuid4()),
+        "transaction_id": transaction_id,
+        "risk_score": risk_score,
+        "decision": decision,
+        "status": AlertStatus.PENDING,
+        "triggered_rules": [],
+        "created_at": _NOW,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
 
 
-async def _check_idempotency_key(redis_client: Redis, external_id: str) -> bool:
-    """Check if the idempotency key exists in Redis."""
-    return await redis_client.exists(f"idempotency:transaction:{external_id}") > 0
+def _make_assessment(score: int = 10, decision_value: str = "APPROVE", triggered_rules=None):
+    """Minimal AssessmentResult-like object from pylitmus."""
+    if triggered_rules is None:
+        triggered_rules = []
+    return SimpleNamespace(
+        total_score=score,
+        decision=SimpleNamespace(value=decision_value),
+        triggered_rules=triggered_rules,
+        processing_time_ms=5.2,
+    )
+
+
+def _make_triggered_rule(
+    code="AMT_001", name="High Amount", category="amount", severity_value="high", score=85
+):
+    return SimpleNamespace(
+        rule_code=code,
+        rule_name=name,
+        category=category,
+        severity=SimpleNamespace(value=severity_value),
+        score=score,
+        explanation=f"{name} triggered",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixture: a consumer with mocked dependencies
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def consumer():
+    """Build a TransactionConsumer with mocked session_factory and redis."""
+    settings = get_settings()
+    mock_session = AsyncMock()
+    mock_session_factory = MagicMock()
+    mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.exists = AsyncMock(return_value=0)
+    mock_redis.delete = AsyncMock(return_value=1)
+
+    c = TransactionConsumer(
+        settings=settings,
+        session_factory=mock_session_factory,
+        redis=mock_redis,
+    )
+    # Pre-initialise the fraud detector so we can mock it
+    c._fraud_detector = MagicMock()
+    c._rules_count = 5
+
+    return c, mock_session, mock_redis
 
 
 # ---------------------------------------------------------------------------
 # Tests — Message Processing
 # ---------------------------------------------------------------------------
 
+
 class TestKafkaConsumerProcessing:
-    """Tests that the running Kafka consumer processes messages end-to-end."""
+    """Tests that TransactionConsumer.process() handles messages correctly."""
 
-    async def test_consumer_processes_transaction(self, kafka_producer, db_session):
-        """Publish a transaction to Kafka → consumer stores it in DB."""
-        txn = make_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+    async def test_consumer_processes_transaction(self, consumer):
+        """A valid transaction message is stored and evaluated."""
+        c, mock_session, _ = consumer
+        txn_data = make_transaction()
+        msg = _kafka_message(txn_data)
 
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None, f"Transaction {txn['external_id']} not found in DB after 15s"
-        assert row["external_id"] == txn["external_id"]
+        stored_txn = _make_transaction_model(txn_data["external_id"])
+        assessment = _make_assessment(score=10, decision_value="APPROVE")
 
-    async def test_consumer_creates_alert_for_high_risk(self, kafka_producer, db_session):
-        """High-risk transaction → consumer creates alert in DB."""
-        txn = make_high_risk_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+        with (
+            patch("app.core.evaluation_service.TransactionRepository") as MockTxnRepo,
+            patch("app.core.evaluation_service.AlertRepository"),
+            patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent,
+        ):
+            # Idempotency says "process this"
+            processor_mock = AsyncMock()
+            processor_mock.should_process = True
+            processor_mock.set_result = MagicMock()
+            MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+            MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        alert = await _wait_for_alert(db_session, txn["external_id"])
-        # Alert may or may not be created depending on which rules are seeded
-        # But the transaction should definitely be stored
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None, f"Transaction {txn['external_id']} not found in DB"
+            MockTxnRepo.return_value.upsert = AsyncMock(return_value=stored_txn)
+            c._fraud_detector.evaluate.return_value = assessment
+            c._fraud_detector.get_decision.return_value = Decision.APPROVE
 
-        if alert:
-            assert alert["risk_score"] > 0
-            assert alert["decision"] in ("review", "flag")
-            assert alert["status"] == "pending"
+            await c.process(msg)
 
-    async def test_consumer_sets_idempotency_key(self, kafka_producer, db_session, redis_client):
-        """After processing, the idempotency key should exist in Redis."""
-        txn = make_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+            MockTxnRepo.return_value.upsert.assert_called_once()
+            c._fraud_detector.evaluate.assert_called_once()
+            processor_mock.set_result.assert_called_once()
 
-        # Wait for the transaction to appear (proves consumer processed it)
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None
+    async def test_consumer_creates_alert_for_high_risk(self, consumer):
+        """High-risk transaction triggers alert creation."""
+        c, mock_session, _ = consumer
+        txn_data = make_high_risk_transaction()
+        msg = _kafka_message(txn_data)
 
-        # Idempotency key should be set
-        has_key = await _check_idempotency_key(redis_client, txn["external_id"])
-        assert has_key, "Idempotency key not found in Redis after processing"
+        stored_txn = _make_transaction_model(txn_data["external_id"])
+        triggered = [_make_triggered_rule()]
+        assessment = _make_assessment(score=85, decision_value="FLAG", triggered_rules=triggered)
+        alert = _make_alert_model(stored_txn.id, 85, "flag")
+
+        with (
+            patch("app.core.evaluation_service.TransactionRepository") as MockTxnRepo,
+            patch("app.core.evaluation_service.AlertRepository") as MockAlertRepo,
+            patch("app.core.evaluation_service.ConfigRepository") as MockConfigRepo,
+            patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent,
+        ):
+            processor_mock = AsyncMock()
+            processor_mock.should_process = True
+            processor_mock.set_result = MagicMock()
+            MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+            MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            MockTxnRepo.return_value.upsert = AsyncMock(return_value=stored_txn)
+            MockAlertRepo.return_value.create = AsyncMock(return_value=alert)
+            MockAlertRepo.return_value.review = AsyncMock(return_value=alert)
+            MockConfigRepo.return_value.get_int = AsyncMock(return_value=90)
+            c._fraud_detector.evaluate.return_value = assessment
+            c._fraud_detector.get_decision.return_value = Decision.FLAG
+
+            await c.process(msg)
+
+            MockAlertRepo.return_value.create.assert_called_once()
+            call_kwargs = MockAlertRepo.return_value.create.call_args
+            assert call_kwargs.kwargs["risk_score"] == 85
+            assert call_kwargs.kwargs["decision"] == Decision.FLAG
+
+    async def test_consumer_sets_idempotency_key(self, consumer):
+        """After processing, the idempotency processor set_result is called."""
+        c, _, mock_redis = consumer
+        txn_data = make_transaction()
+        msg = _kafka_message(txn_data)
+
+        stored_txn = _make_transaction_model(txn_data["external_id"])
+        assessment = _make_assessment(score=5, decision_value="APPROVE")
+
+        with (
+            patch("app.core.evaluation_service.TransactionRepository") as MockTxnRepo,
+            patch("app.core.evaluation_service.AlertRepository"),
+            patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent,
+        ):
+            processor_mock = AsyncMock()
+            processor_mock.should_process = True
+            processor_mock.set_result = MagicMock()
+            MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+            MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            MockTxnRepo.return_value.upsert = AsyncMock(return_value=stored_txn)
+            c._fraud_detector.evaluate.return_value = assessment
+            c._fraud_detector.get_decision.return_value = Decision.APPROVE
+
+            await c.process(msg)
+
+            # The processor marks the result so IdempotencyService persists it
+            processor_mock.set_result.assert_called_once()
+            result = processor_mock.set_result.call_args[0][0]
+            assert result["external_id"] == txn_data["external_id"]
 
 
 class TestKafkaConsumerIdempotency:
     """Tests for duplicate message handling."""
 
-    async def test_duplicate_message_not_reprocessed(self, kafka_producer, db_session):
-        """Sending the same message twice should not create duplicate records."""
-        txn = make_transaction()
+    async def test_duplicate_message_not_reprocessed(self, consumer):
+        """When idempotency says already processed, transaction is skipped."""
+        c, _, _ = consumer
+        txn_data = make_transaction()
+        msg = _kafka_message(txn_data)
 
-        # Send twice
-        await kafka_producer.send_and_wait(TOPIC, txn)
-        await asyncio.sleep(2)
-        await kafka_producer.send_and_wait(TOPIC, txn)
+        with patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent:
+            processor_mock = AsyncMock()
+            processor_mock.should_process = False  # Already processed
+            MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+            MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        # Wait for processing
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None
+            await c.process(msg)
 
-        # Count how many transactions have this external_id
-        await asyncio.sleep(3)
-        await db_session.rollback()
-        result = await db_session.execute(
-            text("SELECT count(*) FROM transactions WHERE external_id = :eid"),
-            {"eid": txn["external_id"]},
-        )
-        count = result.scalar()
-        assert count == 1, f"Expected 1 transaction, got {count} — duplicate was not prevented"
+            # Fraud detector should NOT have been called
+            c._fraud_detector.evaluate.assert_not_called()
 
 
 class TestKafkaConsumerValidation:
     """Tests for invalid message handling."""
 
-    async def test_invalid_json_handled_gracefully(self, kafka_producer, db_session):
-        """Invalid JSON should not crash the consumer (sent to DLQ)."""
-        # Send raw bytes that aren't valid JSON
-        raw_producer = AIOKafkaProducer(
-            bootstrap_servers=get_settings().kafka_bootstrap_servers,
-            value_serializer=lambda v: v.encode("utf-8") if isinstance(v, str) else v,
-        )
-        await raw_producer.start()
-        await raw_producer.send_and_wait(TOPIC, b"not-valid-json{{{")
-        await raw_producer.stop()
+    async def test_invalid_json_raises(self, consumer):
+        """Invalid JSON raises json.JSONDecodeError so BaseConsumer sends to DLQ."""
+        c, _, _ = consumer
+        msg = _kafka_message(b"not-valid-json{{{")
 
-        # Consumer should still be alive — send a valid message after
-        await asyncio.sleep(3)
-        txn = make_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+        with pytest.raises(json.JSONDecodeError):
+            await c.process(msg)
 
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None, "Consumer appears to have died after invalid JSON"
-
-    async def test_missing_external_id_skipped(self, kafka_producer, db_session):
-        """A message without external_id should be skipped, not crash consumer."""
+    async def test_missing_external_id_skipped(self, consumer):
+        """A message without external_id is skipped (no error raised)."""
+        c, _, _ = consumer
         bad_msg = {
             "customer_id": str(uuid.uuid4()),
             "amount": "100.00",
@@ -194,44 +283,87 @@ class TestKafkaConsumerValidation:
             "transaction_type": "purchase",
             "channel": "online",
         }
-        await kafka_producer.send_and_wait(TOPIC, bad_msg)
+        msg = _kafka_message(bad_msg)
 
-        # Send a valid message after to prove consumer is still running
-        await asyncio.sleep(2)
-        txn = make_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+        # Should return without raising — consumer stays alive
+        await c.process(msg)
 
-        row = await _wait_for_transaction(db_session, txn["external_id"])
-        assert row is not None, "Consumer appears to have died after bad message"
+        # Fraud detector should NOT have been called
+        c._fraud_detector.evaluate.assert_not_called()
 
 
 class TestKafkaConsumerMetrics:
     """Tests that the consumer produces expected side effects."""
 
-    async def test_alert_has_triggered_rules(self, kafka_producer, db_session):
-        """Alerts should contain details of which rules triggered."""
-        txn = make_high_risk_transaction()
-        await kafka_producer.send_and_wait(TOPIC, txn)
+    async def test_alert_has_triggered_rules(self, consumer):
+        """Alerts contain details of which rules triggered."""
+        c, mock_session, _ = consumer
+        txn_data = make_high_risk_transaction()
+        msg = _kafka_message(txn_data)
 
-        alert = await _wait_for_alert(db_session, txn["external_id"])
-        if alert is None:
-            pytest.skip("No alert created — rules may not have triggered for this payload")
+        stored_txn = _make_transaction_model(txn_data["external_id"])
+        triggered = [
+            _make_triggered_rule("AMT_001", "High Amount", "amount", "high", 85),
+            _make_triggered_rule("GEO_002", "Risky Country", "geographic", "critical", 90),
+        ]
+        assessment = _make_assessment(score=92, decision_value="FLAG", triggered_rules=triggered)
+        alert = _make_alert_model(stored_txn.id, 92, "flag")
 
-        rules = alert["triggered_rules"]
-        assert isinstance(rules, list)
-        assert len(rules) > 0
-        for rule in rules:
-            assert "code" in rule
-            assert "score" in rule
+        with (
+            patch("app.core.evaluation_service.TransactionRepository") as MockTxnRepo,
+            patch("app.core.evaluation_service.AlertRepository") as MockAlertRepo,
+            patch("app.core.evaluation_service.ConfigRepository") as MockConfigRepo,
+            patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent,
+        ):
+            processor_mock = AsyncMock()
+            processor_mock.should_process = True
+            processor_mock.set_result = MagicMock()
+            MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+            MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
 
-    async def test_multiple_transactions_processed_in_order(self, kafka_producer, db_session):
-        """Multiple messages should all be processed."""
+            MockTxnRepo.return_value.upsert = AsyncMock(return_value=stored_txn)
+            MockAlertRepo.return_value.create = AsyncMock(return_value=alert)
+            MockAlertRepo.return_value.review = AsyncMock(return_value=alert)
+            MockConfigRepo.return_value.get_int = AsyncMock(return_value=90)
+            c._fraud_detector.evaluate.return_value = assessment
+            c._fraud_detector.get_decision.return_value = Decision.FLAG
+
+            await c.process(msg)
+
+            call_kwargs = MockAlertRepo.return_value.create.call_args.kwargs
+            rules = call_kwargs["triggered_rules"]
+            assert isinstance(rules, list)
+            assert len(rules) == 2
+            for rule in rules:
+                assert "code" in rule
+                assert "score" in rule
+
+    async def test_multiple_transactions_processed(self, consumer):
+        """Multiple messages can be processed sequentially."""
+        c, _, _ = consumer
         txns = [make_transaction() for _ in range(5)]
 
-        for txn in txns:
-            await kafka_producer.send_and_wait(TOPIC, txn)
+        for txn_data in txns:
+            msg = _kafka_message(txn_data)
+            stored_txn = _make_transaction_model(txn_data["external_id"])
+            assessment = _make_assessment(score=10, decision_value="APPROVE")
 
-        # Wait and verify all appear
-        for txn in txns:
-            row = await _wait_for_transaction(db_session, txn["external_id"], timeout=20.0)
-            assert row is not None, f"Transaction {txn['external_id']} not processed"
+            with (
+                patch("app.core.evaluation_service.TransactionRepository") as MockTxnRepo,
+                patch("app.core.evaluation_service.AlertRepository"),
+                patch("app.consumers.transaction_consumer.IdempotentProcessor") as MockIdempotent,
+            ):
+                processor_mock = AsyncMock()
+                processor_mock.should_process = True
+                processor_mock.set_result = MagicMock()
+                MockIdempotent.return_value.__aenter__ = AsyncMock(return_value=processor_mock)
+                MockIdempotent.return_value.__aexit__ = AsyncMock(return_value=False)
+
+                MockTxnRepo.return_value.upsert = AsyncMock(return_value=stored_txn)
+                c._fraud_detector.evaluate.return_value = assessment
+                c._fraud_detector.get_decision.return_value = Decision.APPROVE
+
+                await c.process(msg)
+
+        # All 5 should have been evaluated
+        assert c._fraud_detector.evaluate.call_count == 5

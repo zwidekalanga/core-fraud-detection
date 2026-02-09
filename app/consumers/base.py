@@ -11,6 +11,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
 from app.config import Settings
+from app.telemetry import kafka_span
 
 logger = logging.getLogger(__name__)
 
@@ -32,20 +33,25 @@ class BaseConsumer(ABC):
         topic: str,
         group_id: str | None = None,
         dlq_topic: str | None = None,
+        max_retries: int = 3,
+        max_concurrency: int = 10,
     ):
         self.settings = settings
         self.topic = topic
         self.group_id = group_id or settings.kafka_consumer_group
         self.dlq_topic = dlq_topic
+        self.max_retries = max_retries
 
         self._consumer: AIOKafkaConsumer | None = None
         self._producer: AIOKafkaProducer | None = None
-        self._running = False
+        self._stop_event = asyncio.Event()
         self._healthy = False
+        # H16: Backpressure — limit concurrent message processing
+        self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def start(self) -> None:
         """Start the consumer."""
-        logger.info(f"Starting consumer for topic: {self.topic}")
+        logger.info("Starting consumer for topic: %s", self.topic)
 
         # Create consumer
         self._consumer = AIOKafkaConsumer(
@@ -66,27 +72,29 @@ class BaseConsumer(ABC):
             await self._producer.start()
 
         await self._consumer.start()
-        self._running = True
+        self._stop_event.clear()
         self._healthy = True
 
-        # Setup signal handlers
-        loop = asyncio.get_event_loop()
+        # Setup signal handlers — set the event (thread-safe) instead of
+        # creating a task from a signal handler (race-prone).
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
+            loop.add_signal_handler(sig, self._stop_event.set)
 
-        logger.info(f"Consumer started for topic: {self.topic}")
+        logger.info("Consumer started for topic: %s", self.topic)
 
     async def stop(self) -> None:
         """Stop the consumer gracefully."""
         logger.info("Stopping consumer...")
-        self._running = False
+        self._stop_event.set()
         self._healthy = False
+
+        if self._producer:
+            await self._producer.flush()  # H15: flush pending DLQ messages
+            await self._producer.stop()
 
         if self._consumer:
             await self._consumer.stop()
-
-        if self._producer:
-            await self._producer.stop()
 
         logger.info("Consumer stopped")
 
@@ -99,34 +107,63 @@ class BaseConsumer(ABC):
 
         try:
             async for message in self._consumer:
-                if not self._running:
+                if self._stop_event.is_set():
                     break
 
-                try:
-                    await self._process_message(message)
-
-                    # Commit offset after successful processing
-                    await self._consumer.commit()
-
-                except Exception as e:
-                    logger.error(
-                        f"Error processing message: {e}",
-                        extra={
-                            "topic": message.topic,
-                            "partition": message.partition,
-                            "offset": message.offset,
-                        },
-                    )
-
-                    # Send to DLQ if configured
-                    if self.dlq_topic and self._producer:
-                        await self._send_to_dlq(message, str(e))
-
-                    # Commit anyway to prevent infinite retry loop
-                    await self._consumer.commit()
+                # H16: Backpressure — wait for a semaphore slot
+                async with self._semaphore:
+                    await self._process_with_retry(message)
 
         finally:
             await self.stop()
+
+    async def _process_with_retry(self, message: Any) -> None:
+        """Process a message with H15 retry-before-DLQ logic."""
+        if self._consumer is None:
+            return
+
+        async with kafka_span(message.topic, message.partition, message.offset):
+            await self._process_with_retry_inner(message)
+
+    async def _process_with_retry_inner(self, message: Any) -> None:
+        """Inner retry logic wrapped by the tracing span."""
+        if self._consumer is None:
+            return
+
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                await self._process_message(message)
+                await self._consumer.commit()
+                return  # success
+            except Exception as e:
+                last_exc = e
+                logger.warning(
+                    "Attempt %d/%d failed for offset %s: %s",
+                    attempt,
+                    self.max_retries,
+                    message.offset,
+                    e,
+                    extra={
+                        "topic": message.topic,
+                        "partition": message.partition,
+                        "offset": message.offset,
+                    },
+                )
+                if attempt < self.max_retries:
+                    await asyncio.sleep(min(2**attempt, 30))  # exponential backoff
+
+        # All retries exhausted — send to DLQ
+        logger.error(
+            "All %d retries exhausted for offset %s — sending to DLQ",
+            self.max_retries,
+            message.offset,
+        )
+        if self.dlq_topic and self._producer:
+            await self._send_to_dlq(message, str(last_exc))
+
+        # Commit to avoid infinite retry loop
+        await self._consumer.commit()
 
     async def _process_message(self, message: Any) -> None:
         """Process a single message with error handling."""
@@ -160,9 +197,9 @@ class BaseConsumer(ABC):
 
         try:
             await self._producer.send_and_wait(self.dlq_topic, dlq_message)
-            logger.info(f"Sent message to DLQ: {self.dlq_topic}")
+            logger.info("Sent message to DLQ: %s", self.dlq_topic)
         except KafkaError as e:
-            logger.error(f"Failed to send to DLQ: {e}")
+            logger.error("Failed to send to DLQ: %s", e)
 
     @property
     def is_healthy(self) -> bool:

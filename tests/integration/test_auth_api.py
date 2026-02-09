@@ -1,105 +1,58 @@
-"""Integration tests for auth API endpoints.
+"""Integration tests for authentication and authorisation.
 
-These tests run against the live containers via the AsyncClient fixture,
-exercising the full authentication flow: login, token refresh, and /me.
+Token issuance (login/refresh) lives in core-banking.  This service only
+performs *stateless JWT validation* and role-based access control.
+These tests verify the /me endpoint, token validation, and RBAC enforcement.
 """
+
+import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tests.conftest import make_rule_payload
+from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
+from tests.helpers.token_factory import create_access_token, create_refresh_token
 
 pytestmark = pytest.mark.asyncio
 
 
 # ======================================================================
-# Helper: login and get tokens
+# Helper
 # ======================================================================
 
 
-async def _login(client, username: str, password: str):  # noqa: ANN001
-    """Authenticate and return the httpx Response."""
-    resp = await client.post(
-        "/api/v1/auth/login",
-        data={"username": username, "password": password},
-    )
-    return resp
-
-
-async def _auth_header(
-    client, username: str = "admin", password: str = "admin123"
-) -> dict[str, str]:
-    """Login and return Authorization header dict."""
-    resp = await _login(client, username, password)
-    tokens = resp.json()
-    return {"Authorization": f"Bearer {tokens['access_token']}"}
+def _make_headers(role: str, username: str) -> dict[str, str]:
+    """Shorthand for creating an Authorization header."""
+    return _auth_headers(role, username)
 
 
 # ======================================================================
-# Login (POST /api/v1/auth/login)
-# ======================================================================
-
-
-class TestLoginEndpoint:
-    """Tests for the login endpoint."""
-
-    async def test_login_admin_success(self, client):
-        resp = await _login(client, "admin", "admin123")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "access_token" in body
-        assert "refresh_token" in body
-        assert body["token_type"] == "bearer"
-        assert body["expires_in"] > 0
-
-    async def test_login_analyst_success(self, client):
-        resp = await _login(client, "analyst", "analyst123")
-        assert resp.status_code == 200
-        assert "access_token" in resp.json()
-
-    async def test_login_viewer_success(self, client):
-        resp = await _login(client, "viewer", "viewer123")
-        assert resp.status_code == 200
-        assert "access_token" in resp.json()
-
-    async def test_login_wrong_password(self, client):
-        resp = await _login(client, "admin", "wrongpassword")
-        assert resp.status_code == 401
-        assert "Invalid" in resp.json()["detail"]
-
-    async def test_login_nonexistent_user(self, client):
-        resp = await _login(client, "nobody", "password")
-        assert resp.status_code == 401
-
-    async def test_login_empty_credentials(self, client):
-        resp = await client.post(
-            "/api/v1/auth/login",
-            data={"username": "", "password": ""},
-        )
-        assert resp.status_code in (401, 422)
-
-
-# ======================================================================
-# Get Current User (GET /api/v1/auth/me)
+# GET /api/v1/auth/me — token introspection
 # ======================================================================
 
 
 class TestMeEndpoint:
-    """Tests for the /me endpoint."""
+    """Tests for the /me endpoint (the only auth endpoint on this service)."""
 
     async def test_get_me_admin(self, client):
-        headers = await _auth_header(client, "admin", "admin123")
+        headers = _make_headers("admin", "admin")
         resp = await client.get("/api/v1/auth/me", headers=headers)
         assert resp.status_code == 200
         body = resp.json()
         assert body["username"] == "admin"
         assert body["role"] == "admin"
-        assert body["is_active"] is True
 
     async def test_get_me_analyst(self, client):
-        headers = await _auth_header(client, "analyst", "analyst123")
+        headers = _make_headers("analyst", "analyst")
         resp = await client.get("/api/v1/auth/me", headers=headers)
         assert resp.status_code == 200
         assert resp.json()["role"] == "analyst"
+
+    async def test_get_me_viewer(self, client):
+        headers = _make_headers("viewer", "viewer")
+        resp = await client.get("/api/v1/auth/me", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "viewer"
 
     async def test_get_me_without_token(self, client):
         resp = await client.get("/api/v1/auth/me")
@@ -110,45 +63,15 @@ class TestMeEndpoint:
         resp = await client.get("/api/v1/auth/me", headers=headers)
         assert resp.status_code == 401
 
-
-# ======================================================================
-# Token Refresh (POST /api/v1/auth/refresh)
-# ======================================================================
-
-
-class TestRefreshEndpoint:
-    """Tests for the token refresh endpoint."""
-
-    async def test_refresh_token_success(self, client):
-        login_resp = await _login(client, "admin", "admin123")
-        refresh_token = login_resp.json()["refresh_token"]
-
-        resp = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token},
+    async def test_get_me_with_refresh_token_rejected(self, client):
+        """Using a refresh token (type=refresh) as an access token should fail."""
+        refresh = create_refresh_token(
+            user_id=str(uuid.uuid4()),
+            role="admin",
+            username="admin",
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "access_token" in body
-        assert "refresh_token" in body
-        assert body["token_type"] == "bearer"
-
-    async def test_refresh_with_access_token_fails(self, client):
-        """Using an access token as a refresh token should fail."""
-        login_resp = await _login(client, "admin", "admin123")
-        access_token = login_resp.json()["access_token"]
-
-        resp = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": access_token},
-        )
-        assert resp.status_code == 401
-
-    async def test_refresh_with_invalid_token(self, client):
-        resp = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": "not.a.valid.token"},
-        )
+        headers = {"Authorization": f"Bearer {refresh}"}
+        resp = await client.get("/api/v1/auth/me", headers=headers)
         assert resp.status_code == 401
 
 
@@ -162,35 +85,44 @@ class TestRBACEnforcement:
 
     async def test_viewer_can_list_alerts(self, client):
         """Viewers should be able to read alerts."""
-        headers = await _auth_header(client, "viewer", "viewer123")
-        resp = await client.get("/api/v1/alerts", headers=headers)
+        headers = _make_headers("viewer", "viewer")
+        with patch("app.api.v1.alerts.AlertRepository") as MockRepo:
+            MockRepo.return_value.get_all = AsyncMock(return_value=([], 0))
+            resp = await client.get("/api/v1/alerts", headers=headers)
         assert resp.status_code == 200
 
     async def test_viewer_can_list_rules(self, client):
         """Viewers should be able to read rules."""
-        headers = await _auth_header(client, "viewer", "viewer123")
-        resp = await client.get("/api/v1/rules", headers=headers)
+        headers = _make_headers("viewer", "viewer")
+        with patch("app.api.v1.rules.RuleRepository") as MockRepo:
+            MockRepo.return_value.get_all = AsyncMock(return_value=([], 0))
+            resp = await client.get("/api/v1/rules", headers=headers)
         assert resp.status_code == 200
 
     async def test_analyst_cannot_create_rule(self, client):
         """Analysts should NOT be able to create rules (admin only)."""
-        headers = await _auth_header(client, "analyst", "analyst123")
+        headers = _make_headers("analyst", "analyst")
         payload = make_rule_payload()
         resp = await client.post("/api/v1/rules", json=payload, headers=headers)
         assert resp.status_code == 403
 
     async def test_viewer_cannot_create_rule(self, client):
         """Viewers should NOT be able to create rules."""
-        headers = await _auth_header(client, "viewer", "viewer123")
+        headers = _make_headers("viewer", "viewer")
         payload = make_rule_payload()
         resp = await client.post("/api/v1/rules", json=payload, headers=headers)
         assert resp.status_code == 403
 
     async def test_admin_can_create_rule(self, client):
         """Admins should be able to create rules."""
-        headers = await _auth_header(client, "admin", "admin123")
+        headers = _make_headers("admin", "admin")
         payload = make_rule_payload()
-        resp = await client.post("/api/v1/rules", json=payload, headers=headers)
+        created = _make_rule_model(**payload)
+        with patch("app.api.v1.rules.RuleRepository") as MockRepo:
+            repo = MockRepo.return_value
+            repo.get_by_code = AsyncMock(return_value=None)
+            repo.create = AsyncMock(return_value=created)
+            resp = await client.post("/api/v1/rules", json=payload, headers=headers)
         assert resp.status_code == 201
 
     async def test_unauthenticated_cannot_access_rules(self, client):

@@ -2,7 +2,6 @@
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.models.config import CONFIG_DEFAULTS, SystemConfig
 
@@ -52,27 +51,6 @@ class ConfigRepository:
             if description is not None:
                 config.description = description
 
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(config)
         return config
-
-
-class SyncConfigRepository:
-    """Synchronous data access layer for Celery tasks."""
-
-    def __init__(self, session: Session):
-        self.session = session
-
-    def get_int(self, key: str, default: int = 0) -> int:
-        """Get a config value as an integer (synchronous)."""
-        result = self.session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
-        row = result.scalar_one_or_none()
-        if row is None:
-            fallback = CONFIG_DEFAULTS.get(key)
-            if fallback is None:
-                return default
-            row = fallback
-        try:
-            return int(row)
-        except (ValueError, TypeError):
-            return default

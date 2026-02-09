@@ -48,12 +48,16 @@ class TransactionRepository:
             extra_data=txn_data.extra_data,
         )
         self.session.add(transaction)
-        await self.session.commit()
-        await self.session.refresh(transaction)
+        await self.session.flush()
         return transaction
 
     async def upsert(self, txn_data: TransactionEvaluateRequest) -> Transaction:
-        """Insert or update a transaction (idempotent)."""
+        """Insert or ignore a transaction (idempotent on external_id).
+
+        Returns the existing or newly-created transaction. Raises
+        ``RuntimeError`` if the row cannot be fetched after the upsert
+        (should not happen under normal operation).
+        """
         stmt = (
             insert(Transaction)
             .values(
@@ -77,7 +81,13 @@ class TransactionRepository:
         )
 
         await self.session.execute(stmt)
-        await self.session.commit()
+        await self.session.flush()
 
         # Fetch the record (either new or existing)
-        return await self.get_by_external_id(txn_data.external_id)  # type: ignore
+        txn = await self.get_by_external_id(txn_data.external_id)
+        if txn is None:
+            raise RuntimeError(
+                f"Transaction upsert succeeded but fetch failed for "
+                f"external_id={txn_data.external_id}"
+            )
+        return txn

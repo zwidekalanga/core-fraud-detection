@@ -6,6 +6,7 @@ from app.auth.dependencies import require_role
 from app.dependencies import DBSession
 from app.repositories.config_repository import ConfigRepository
 from app.schemas.config import ConfigResponse, ConfigUpdateRequest
+from app.utils.audit import audit_logged
 
 router = APIRouter()
 
@@ -28,7 +29,7 @@ async def get_config(db: DBSession) -> ConfigResponse:
 @router.put(
     "",
     response_model=ConfigResponse,
-    dependencies=[Depends(require_role("admin"))],
+    dependencies=[Depends(require_role("admin")), Depends(audit_logged("update_config"))],
 )
 async def update_config(
     body: ConfigUpdateRequest,

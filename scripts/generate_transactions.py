@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import random
 import sys
 import uuid
@@ -15,9 +16,50 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 
-# Sample data for generating realistic transactions
-CUSTOMERS = [str(uuid.uuid4()) for _ in range(10)]
+# ---------------------------------------------------------------------------
+# Banking DB connection string — same Postgres host, different database.
+# ---------------------------------------------------------------------------
+BANKING_DATABASE_URL = (
+    "postgresql+asyncpg://postgres:postgres@postgres:5432/core_banking"
+)
+
+# Fallback random customer IDs (used only when the banking DB is unreachable)
+_FALLBACK_CUSTOMERS = [str(uuid.uuid4()) for _ in range(10)]
+
+# Will be populated at runtime by `_load_customer_ids()`
+CUSTOMERS: list[str] = []
+
+
+async def _load_customer_ids() -> list[str]:
+    """Fetch real customer IDs from the core_banking database.
+
+    Falls back to random UUIDs when the banking DB is unavailable (e.g. tests).
+    """
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+        engine = create_async_engine(BANKING_DATABASE_URL, pool_size=2)
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with factory() as session:
+            result = await session.execute(text("SELECT id FROM customers"))
+            ids = [str(row[0]) for row in result.all()]
+
+        await engine.dispose()
+
+        if ids:
+            logger.info("Loaded %d customer IDs from core_banking", len(ids))
+            return ids
+        else:
+            logger.warning("No customers found in core_banking — using fallback UUIDs")
+            return _FALLBACK_CUSTOMERS
+
+    except Exception as exc:
+        logger.warning("Cannot reach core_banking DB (%s) — using fallback UUIDs", exc)
+        return _FALLBACK_CUSTOMERS
 
 CHANNELS = ["card", "eft", "mobile", "online", "atm"]
 
@@ -103,6 +145,9 @@ def generate_transaction(high_risk: bool = False) -> dict:
 
 async def produce_transactions(count: int, high_risk_pct: float = 0.2) -> None:
     """Generate and publish transactions to Kafka."""
+    global CUSTOMERS  # noqa: PLW0603
+    CUSTOMERS = await _load_customer_ids()
+
     settings = get_settings()
 
     producer = AIOKafkaProducer(

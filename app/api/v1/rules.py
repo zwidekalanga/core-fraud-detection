@@ -2,20 +2,24 @@
 
 from math import ceil
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.auth.dependencies import require_role
 from app.dependencies import DBSession
 from app.models.rule import RuleCategory
-from app.repositories.rule_repository import RuleRepository
+from app.repositories.rule_repository import DuplicateRuleError, RuleRepository
 from app.schemas.rule import (
     RuleCreate,
     RuleListResponse,
     RuleResponse,
     RuleUpdate,
 )
+from app.utils.audit import audit_logged
 
 router = APIRouter()
+
+# Reusable Path() for rule code parameters — mirrors RuleCreate.code pattern.
+_RULE_CODE = Path(pattern=r"^[A-Z]{2,4}_\d{3}$", description="Rule code (e.g. AMT_001)")
 
 
 @router.get(
@@ -63,7 +67,8 @@ async def list_rules(
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def get_rule(
-    code: str,
+    code: str = _RULE_CODE,
+    *,
     db: DBSession,
 ) -> RuleResponse:
     """Get a specific rule by code."""
@@ -83,7 +88,7 @@ async def get_rule(
     "",
     response_model=RuleResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role("admin"))],
+    dependencies=[Depends(require_role("admin")), Depends(audit_logged("create_rule"))],
 )
 async def create_rule(
     rule_data: RuleCreate,
@@ -92,25 +97,25 @@ async def create_rule(
     """Create a new fraud rule."""
     repo = RuleRepository(db)
 
-    # Check if rule already exists
-    existing = await repo.get_by_code(rule_data.code)
-    if existing:
+    try:
+        rule = await repo.create(rule_data)
+    except DuplicateRuleError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Rule with code '{rule_data.code}' already exists",
         )
 
-    rule = await repo.create(rule_data)
     return RuleResponse.model_validate(rule)
 
 
 @router.put(
     "/{code}",
     response_model=RuleResponse,
-    dependencies=[Depends(require_role("admin"))],
+    dependencies=[Depends(require_role("admin")), Depends(audit_logged("update_rule"))],
 )
 async def update_rule(
-    code: str,
+    code: str = _RULE_CODE,
+    *,
     rule_data: RuleUpdate,
     db: DBSession,
 ) -> RuleResponse:
@@ -130,10 +135,11 @@ async def update_rule(
 @router.delete(
     "/{code}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role("admin"))],
+    dependencies=[Depends(require_role("admin")), Depends(audit_logged("delete_rule"))],
 )
 async def delete_rule(
-    code: str,
+    code: str = _RULE_CODE,
+    *,
     db: DBSession,
 ) -> None:
     """Soft delete a rule (disable it)."""
@@ -150,10 +156,11 @@ async def delete_rule(
 @router.post(
     "/{code}/toggle",
     response_model=RuleResponse,
-    dependencies=[Depends(require_role("admin"))],
+    dependencies=[Depends(require_role("admin")), Depends(audit_logged("toggle_rule"))],
 )
 async def toggle_rule(
-    code: str,
+    code: str = _RULE_CODE,
+    *,
     db: DBSession,
 ) -> RuleResponse:
     """Toggle a rule's enabled state."""

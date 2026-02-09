@@ -7,8 +7,6 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from app.config import Settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,9 +32,8 @@ class FeatureService:
     If features are missing, they're computed on-demand.
     """
 
-    def __init__(self, redis: Redis, settings: Settings):
+    def __init__(self, redis: Redis):
         self.redis = redis
-        self.settings = settings
 
     async def get_customer_features(self, customer_id: str) -> CustomerFeatures:
         """
@@ -63,11 +60,13 @@ class FeatureService:
                 )
 
             # Return default features if not cached
-            logger.debug(f"No cached features for customer: {customer_id}")
+            logger.debug("No cached features for customer: %s", customer_id)
             return CustomerFeatures(customer_id=customer_id)
 
         except Exception as e:
-            logger.error(f"Error getting customer features: {e}")
+            logger.warning(
+                "Redis unavailable for customer features (customer=%s): %s", customer_id, e
+            )
             return CustomerFeatures(customer_id=customer_id)
 
     async def get_merchant_risk(self, merchant_id: str) -> int:
@@ -88,7 +87,7 @@ class FeatureService:
             return 0
 
         except Exception as e:
-            logger.error(f"Error getting merchant risk: {e}")
+            logger.warning("Redis unavailable for merchant risk (merchant=%s): %s", merchant_id, e)
             return 0
 
     async def enrich_transaction(

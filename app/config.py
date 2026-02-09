@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,16 +48,11 @@ class Settings(BaseSettings):
     threshold_review: int = 70
     rule_cache_ttl: int = 300  # seconds
 
-    # Notifications
-    smtp_host: str = "localhost"
-    smtp_port: int = 1025
-    smtp_user: str = ""
-    smtp_password: str = ""
-    notification_email_from: str = "fraud-alerts@capitec.co.za"
-    notification_email_to: str = "fraud-team@capitec.co.za"
-
     # JWT / Auth
-    jwt_secret_key: str = "CHANGE-ME-IN-PRODUCTION"
+    jwt_secret_key: str = Field(
+        default="CHANGE-ME-IN-PRODUCTION",
+        description="JWT signing secret. MUST be overridden in production.",
+    )
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_minutes: int = 1440  # 24 hours
@@ -66,6 +61,7 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_service_name: str = "core-fraud-detection-service"
     log_level: str = "INFO"
+    log_format: Literal["json", "console"] = "json"
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -74,6 +70,36 @@ class Settings(BaseSettings):
         if v and "postgresql://" in v and "asyncpg" not in v:
             v = v.replace("postgresql://", "postgresql+asyncpg://")
         return v
+
+    @model_validator(mode="after")
+    def enforce_jwt_secret_strength(self) -> "Settings":
+        """Enforce JWT secret requirements based on environment.
+
+        - Non-dev: reject the placeholder secret AND require >= 32 characters.
+        - Dev: emit a warning for short secrets so local runs aren't blocked.
+        """
+        if self.environment != "development":
+            if self.jwt_secret_key == "CHANGE-ME-IN-PRODUCTION":
+                raise ValueError(
+                    "jwt_secret_key must be changed from its default value "
+                    "in staging/production environments"
+                )
+            if len(self.jwt_secret_key) < 32:
+                raise ValueError(
+                    "jwt_secret_key must be at least 32 characters "
+                    "in staging/production environments"
+                )
+        else:
+            if len(self.jwt_secret_key) < 32:
+                import warnings
+
+                warnings.warn(
+                    "jwt_secret_key is shorter than 32 characters — "
+                    "use a strong, randomly-generated secret in production",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return self
 
     @property
     def is_development(self) -> bool:

@@ -1,7 +1,7 @@
 """Unit tests for the FeatureService."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,16 +17,9 @@ def mock_redis():
 
 
 @pytest.fixture()
-def mock_settings():
-    """Create a mock Settings object."""
-    settings = MagicMock()
-    return settings
-
-
-@pytest.fixture()
-def feature_service(mock_redis, mock_settings):
+def feature_service(mock_redis):
     """Create a FeatureService with mocked dependencies."""
-    return FeatureService(mock_redis, mock_settings)
+    return FeatureService(mock_redis)
 
 
 class TestCustomerFeatures:

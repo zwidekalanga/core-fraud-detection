@@ -6,8 +6,8 @@ import pytest
 from fastapi import HTTPException
 from jose import jwt
 
-from app.auth.security import create_access_token, create_refresh_token
 from app.config import get_settings
+from tests.helpers.token_factory import create_access_token, create_refresh_token
 
 
 class TestTokenUser:

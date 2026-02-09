@@ -1,6 +1,8 @@
 """Pydantic schemas for authentication."""
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, EmailStr
 
 
 class TokenResponse(BaseModel):
@@ -23,7 +25,7 @@ class TokenUser(BaseModel):
 
     id: str
     username: str
-    role: str
+    role: Literal["admin", "analyst", "viewer"]
     email: str = ""
 
 
@@ -32,9 +34,9 @@ class UserResponse(BaseModel):
 
     id: str
     username: str
-    email: str
+    email: EmailStr
     full_name: str = ""
-    role: str
+    role: Literal["admin", "analyst", "viewer"]
     is_active: bool = True
 
     model_config = {"from_attributes": True}

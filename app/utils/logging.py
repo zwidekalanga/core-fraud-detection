@@ -1,13 +1,29 @@
 """Structured logging configuration using structlog."""
+
 import logging
 import sys
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
 
-def setup_logging(log_level: str = "INFO") -> None:
-    """Configure structured logging with structlog."""
+def setup_logging(
+    log_level: str = "INFO",
+    log_format: Literal["json", "console"] = "json",
+) -> None:
+    """Configure structured logging with structlog.
+
+    Args:
+        log_level: Standard Python log level name (INFO, DEBUG, etc.).
+        log_format: Output format — ``"json"`` for machine-readable output
+            (staging/production) or ``"console"`` for coloured human-readable
+            output (local development).
+    """
+    renderer: structlog.types.Processor = (
+        structlog.dev.ConsoleRenderer()
+        if log_format == "console"
+        else structlog.processors.JSONRenderer()
+    )
 
     # Configure structlog
     structlog.configure(
@@ -17,10 +33,7 @@ def setup_logging(log_level: str = "INFO") -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.dev.set_exc_info,
             structlog.processors.TimeStamper(fmt="iso"),
-            # Use console renderer in development, JSON in production
-            structlog.dev.ConsoleRenderer()
-            if log_level == "DEBUG"
-            else structlog.processors.JSONRenderer(),
+            renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
             getattr(logging, log_level.upper(), logging.INFO)

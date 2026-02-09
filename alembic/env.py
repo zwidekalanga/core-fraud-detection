@@ -12,7 +12,6 @@ from app.config import get_settings
 from app.models.alert import FraudAlert
 from app.models.base import Base
 from app.models.config import SystemConfig
-from app.models.notification import Notification
 
 # Import all models to ensure they're registered with Base
 from app.models.rule import FraudRule

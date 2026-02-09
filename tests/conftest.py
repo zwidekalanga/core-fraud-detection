@@ -2,76 +2,103 @@
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis.aioredis
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
 from app.main import app
+from app.models.alert import AlertStatus, Decision
+from tests.helpers.token_factory import create_access_token
 
 # ---------------------------------------------------------------------------
-# Authenticated client fixture
+# Fake Redis (drop-in async replacement)
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_redis():
+    """Create a fakeredis instance that behaves like redis.asyncio.Redis."""
+    return fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+
+# ---------------------------------------------------------------------------
+# Mock DB session
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_session():
+    """Create a mock async DB session.
+
+    The mock supports ``async with factory() as session`` used by
+    ``get_db_session`` and by the readiness probe (``SELECT 1``).
+    """
+    session = AsyncMock()
+    # session.execute returns a result whose .scalar() works
+    result_mock = MagicMock()
+    result_mock.scalar.return_value = 1
+    session.execute.return_value = result_mock
+    session.close = AsyncMock()
+    return session
+
+
+def _make_mock_session_factory():
+    """Return a callable that mimics ``async_sessionmaker().__call__()``."""
+    mock_session = _make_mock_session()
+
+    class _Factory:
+        """Mimic async context manager returned by sessionmaker()."""
+
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return mock_session
+
+        async def __aexit__(self, *args):
+            pass
+
+    return _Factory(), mock_session
+
+
+# ---------------------------------------------------------------------------
+# HTTP client fixture (FastAPI app with mocked infra)
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture()
-async def admin_client(client) -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client pre-authenticated as admin user."""
-    resp = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "admin", "password": "admin123"},
-    )
-    if resp.status_code == 200:
-        token = resp.json()["access_token"]
-        client.headers["Authorization"] = f"Bearer {token}"
-    yield client
-    client.headers.pop("Authorization", None)
+async def client() -> AsyncGenerator[AsyncClient, None]:
+    """Async HTTP client wired to the FastAPI app.
 
+    Infrastructure (DB, Redis) is mocked so tests run without devstack.
+    """
+    session_factory, _ = _make_mock_session_factory()
+    fake_redis = _make_fake_redis()
 
-@pytest_asyncio.fixture()
-async def analyst_client(client) -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client pre-authenticated as analyst user."""
-    resp = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "analyst", "password": "analyst123"},
-    )
-    if resp.status_code == 200:
-        token = resp.json()["access_token"]
-        client.headers["Authorization"] = f"Bearer {token}"
-    yield client
-    client.headers.pop("Authorization", None)
+    app.state.engine = MagicMock()
+    app.state.session_factory = session_factory
+    app.state.redis = fake_redis
 
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
 
-@pytest_asyncio.fixture()
-async def viewer_client(client) -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client pre-authenticated as viewer user."""
-    resp = await client.post(
-        "/api/v1/auth/login",
-        data={"username": "viewer", "password": "viewer123"},
-    )
-    if resp.status_code == 200:
-        token = resp.json()["access_token"]
-        client.headers["Authorization"] = f"Bearer {token}"
-    yield client
-    client.headers.pop("Authorization", None)
+    await fake_redis.aclose()
 
 
 # ---------------------------------------------------------------------------
-# Database fixtures — fresh engine per test to avoid event loop conflicts
+# Mock DB session fixture (for tests that manipulate the session directly)
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture()
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provide a database session for integration tests."""
-    settings = get_settings()
-    engine = create_async_engine(str(settings.database_url), echo=False)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as session:
-        yield session
-    await engine.dispose()
+async def db_session():
+    """Provide a mock database session for integration tests."""
+    return _make_mock_session()
 
 
 # ---------------------------------------------------------------------------
@@ -80,49 +107,138 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest_asyncio.fixture()
-async def redis_client() -> AsyncGenerator[Redis, None]:
-    """Provide a Redis client connected to devstack Redis."""
-    settings = get_settings()
-    client = Redis.from_url(str(settings.redis_url), decode_responses=True)
+async def redis_client():
+    """Provide a fake Redis client."""
+    client = _make_fake_redis()
     yield client
     await client.aclose()
 
 
 # ---------------------------------------------------------------------------
-# HTTP client fixture (FastAPI TestClient via httpx)
+# Auth helpers — generate JWT tokens directly (no login endpoint needed)
 # ---------------------------------------------------------------------------
+
+
+def _make_token(role: str, username: str) -> str:
+    """Create a valid JWT access token for testing."""
+    return create_access_token(
+        user_id=str(uuid.uuid4()),
+        role=role,
+        username=username,
+        email=f"{username}@test.capitec.co.za",
+    )
+
+
+def _auth_headers(role: str, username: str) -> dict[str, str]:
+    """Return Authorization header dict with a valid JWT."""
+    token = _make_token(role, username)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture()
-async def client() -> AsyncGenerator[AsyncClient, None]:
-    """Async HTTP client wired to the FastAPI app.
+async def admin_client(client) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client pre-authenticated as admin user."""
+    client.headers.update(_auth_headers("admin", "admin"))
+    yield client
+    client.headers.pop("Authorization", None)
 
-    Each request gets its own DB session via the app's normal dependency
-    injection — no overrides needed for integration tests against live DB.
-    """
-    # Reset any cached singleton connections from dependencies module
-    import app.dependencies as deps
 
-    deps._engine = None
-    deps._session_factory = None
-    deps._redis_client = None
+@pytest_asyncio.fixture()
+async def analyst_client(client) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client pre-authenticated as analyst user."""
+    client.headers.update(_auth_headers("analyst", "analyst"))
+    yield client
+    client.headers.pop("Authorization", None)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
 
-    # Cleanup singletons after test
-    if deps._engine is not None:
-        await deps._engine.dispose()  # pyright: ignore[reportGeneralTypeIssues]
-        deps._engine = None
-    deps._session_factory = None
-    if deps._redis_client is not None:
-        await deps._redis_client.aclose()  # pyright: ignore[reportGeneralTypeIssues]
-        deps._redis_client = None
+@pytest_asyncio.fixture()
+async def viewer_client(client) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client pre-authenticated as viewer user."""
+    client.headers.update(_auth_headers("viewer", "viewer"))
+    yield client
+    client.headers.pop("Authorization", None)
 
 
 # ---------------------------------------------------------------------------
-# Factory helpers
+# Mock ORM model factories
+# ---------------------------------------------------------------------------
+
+_NOW = datetime.now(UTC)
+
+
+def _make_rule_model(**overrides):
+    """Return a SimpleNamespace that looks like a FraudRule ORM instance."""
+    data = {
+        "code": f"TST_{uuid.uuid4().int % 1000:03d}",
+        "name": "Test Rule",
+        "description": "A rule for testing",
+        "category": "amount",
+        "severity": "medium",
+        "score": 25,
+        "enabled": True,
+        "conditions": {"field": "amount", "operator": "greater_than", "value": 50000},
+        "effective_from": None,
+        "effective_to": None,
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+def _make_transaction_model(**overrides):
+    """Return a SimpleNamespace that looks like a Transaction ORM instance."""
+    data = {
+        "id": str(uuid.uuid4()),
+        "external_id": f"TXN-{uuid.uuid4().hex[:12]}",
+        "customer_id": str(uuid.uuid4()),
+        "amount": Decimal("999999.99"),
+        "currency": "ZAR",
+        "transaction_type": "purchase",
+        "channel": "online",
+        "merchant_name": "Test Store",
+        "location_country": "ZA",
+        "transaction_time": _NOW,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+def _make_alert_model(**overrides):
+    """Return a SimpleNamespace that looks like a FraudAlert ORM instance."""
+    txn = _make_transaction_model()
+    data = {
+        "id": str(uuid.uuid4()),
+        "transaction_id": txn.id,
+        "customer_id": txn.customer_id,
+        "risk_score": 85,
+        "decision": Decision.FLAG,
+        "decision_tier": "high",
+        "decision_tier_description": "High risk",
+        "status": AlertStatus.PENDING,
+        "triggered_rules": [
+            {
+                "code": "AMT_001",
+                "name": "High Amount",
+                "category": "amount",
+                "severity": "high",
+                "score": 85,
+            }
+        ],
+        "processing_time_ms": 12.5,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "review_notes": None,
+        "created_at": _NOW,
+        "updated_at": _NOW,
+        "transaction": txn,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+# ---------------------------------------------------------------------------
+# Factory helpers (payload dicts for HTTP requests)
 # ---------------------------------------------------------------------------
 
 

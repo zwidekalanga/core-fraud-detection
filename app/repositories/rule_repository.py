@@ -3,10 +3,19 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule import FraudRule, RuleCategory
 from app.schemas.rule import RuleCreate, RuleUpdate
+
+
+class DuplicateRuleError(Exception):
+    """Raised when attempting to create a rule with a code that already exists."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(f"Rule with code '{code}' already exists")
 
 
 class RuleRepository:
@@ -38,8 +47,8 @@ class RuleRepository:
             count_query = count_query.where(FraudRule.enabled == True)  # noqa: E712
 
         if category:
-            query = query.where(FraudRule.category == category.value)
-            count_query = count_query.where(FraudRule.category == category.value)
+            query = query.where(FraudRule.category == category)
+            count_query = count_query.where(FraudRule.category == category)
 
         # Get total count
         total = await self.session.scalar(count_query) or 0
@@ -71,13 +80,17 @@ class RuleRepository:
         return list(result.scalars().all())
 
     async def create(self, rule_data: RuleCreate) -> FraudRule:
-        """Create a new rule."""
+        """Create a new rule.
+
+        Raises:
+            DuplicateRuleError: If a rule with the same code already exists.
+        """
         rule = FraudRule(
             code=rule_data.code,
             name=rule_data.name,
             description=rule_data.description,
-            category=rule_data.category.value,
-            severity=rule_data.severity.value,
+            category=rule_data.category,
+            severity=rule_data.severity,
             score=rule_data.score,
             enabled=rule_data.enabled,
             conditions=rule_data.conditions,
@@ -85,7 +98,11 @@ class RuleRepository:
             effective_to=rule_data.effective_to,
         )
         self.session.add(rule)
-        await self.session.commit()
+        try:
+            await self.session.flush()
+        except IntegrityError:
+            await self.session.rollback()
+            raise DuplicateRuleError(rule_data.code)
         await self.session.refresh(rule)
         return rule
 
@@ -98,11 +115,9 @@ class RuleRepository:
         # Update only provided fields
         update_data = rule_data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
-            if field in ("category", "severity") and value is not None:
-                value = value.value if hasattr(value, "value") else value
             setattr(rule, field, value)
 
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(rule)
         return rule
 
@@ -113,7 +128,7 @@ class RuleRepository:
             return False
 
         rule.enabled = False
-        await self.session.commit()
+        await self.session.flush()
         return True
 
     async def toggle(self, code: str) -> FraudRule | None:
@@ -123,6 +138,6 @@ class RuleRepository:
             return None
 
         rule.enabled = not rule.enabled
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(rule)
         return rule

@@ -68,11 +68,12 @@ class FraudAlert(Base, UUIDMixin, TimestampMixin):
     review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
-    transaction = relationship("Transaction", backref="alerts")
+    transaction = relationship("Transaction", lazy="selectin")
 
     __table_args__ = (
         Index("idx_alert_status_created", "status", "created_at"),
         Index("idx_alert_score", "risk_score", postgresql_where="status = 'pending'"),
+        Index("idx_alert_customer_status_created", "customer_id", "status", "created_at"),
     )
 
     def __repr__(self) -> str:

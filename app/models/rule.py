@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,6 +57,8 @@ class FraudRule(Base, TimestampMixin):
     # Temporal bounds (optional)
     effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (CheckConstraint("score >= 0 AND score <= 100", name="ck_rule_score_range"),)
 
     def __repr__(self) -> str:
         return f"<FraudRule {self.code}: {self.name}>"

@@ -1,0 +1,39 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment files (secrets — inject via Docker env/secrets)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Documentation & CI (not needed in image)
+*.md
+.github/
+
+# Docker (avoid recursive context)
+Dockerfile
+docker-compose*.yml
+.dockerignore

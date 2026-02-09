@@ -1,4 +1,5 @@
 """Idempotency service for preventing duplicate message processing."""
+
 import json
 from datetime import timedelta
 from typing import Any
@@ -58,9 +59,7 @@ class IdempotencyService:
         value = json.dumps(result) if result else "1"
         await self.redis.setex(key, self.ttl, value)
 
-    async def get_result(
-        self, message_type: str, external_id: str
-    ) -> dict[str, Any] | None:
+    async def get_result(self, message_type: str, external_id: str) -> dict[str, Any] | None:
         """
         Get the stored result for a previously processed message.
 
@@ -132,15 +131,18 @@ class IdempotentProcessor:
         # Check if already processed
         if await self.service.is_processed(self.message_type, self.external_id):
             self.should_process = False
-            self.cached_result = await self.service.get_result(
-                self.message_type, self.external_id
-            )
+            self.cached_result = await self.service.get_result(self.message_type, self.external_id)
             return self
 
-        # Try to acquire lock
-        self._lock_acquired = await self.service.acquire_lock(
-            self.message_type, self.external_id
-        )
+        # Try to acquire lock — release on failure so __aexit__ doesn't
+        # try to release a lock we never held (M42).
+        try:
+            self._lock_acquired = await self.service.acquire_lock(
+                self.message_type, self.external_id
+            )
+        except Exception:
+            self._lock_acquired = False
+            raise
 
         if not self._lock_acquired:
             # Another consumer is processing this message
@@ -151,9 +153,7 @@ class IdempotentProcessor:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         if exc_type is None and self.should_process and self._result is not None:
             # Mark as processed if successful
-            await self.service.mark_processed(
-                self.message_type, self.external_id, self._result
-            )
+            await self.service.mark_processed(self.message_type, self.external_id, self._result)
 
         if self._lock_acquired:
             await self.service.release_lock(self.message_type, self.external_id)

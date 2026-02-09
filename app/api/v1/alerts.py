@@ -1,64 +1,52 @@
-"""Alerts API endpoints."""
+"""Alerts API endpoints.
+
+Security note — tenant scoping
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+All authenticated users (admin, analyst, viewer) can access any alert
+regardless of which customer or organisation it belongs to.  This is
+intentional: the Sentinel Fraud Ops Portal is an **internal back-office
+tool** operated exclusively by Capitec staff who require full visibility
+across all alerts to triage, investigate, and resolve fraud cases.
+Row-level tenant filtering is therefore not applied.
+
+If this service is ever exposed to external consumers or multi-tenant
+access, alerts MUST be scoped by organisation / tenant ID.
+"""
 
 from datetime import datetime
 from math import ceil
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.dependencies import DBSession
 from app.models.alert import AlertStatus, Decision
-from app.repositories.alert_repository import AlertRepository
+from app.repositories.alert_repository import AlertFilter, AlertRepository
 from app.schemas.alert import (
     AlertListResponse,
     AlertResponse,
     AlertReviewRequest,
     AlertReviewResponse,
-    AlertTransactionInfo,
-    TriggeredRuleDetail,
+    AlertStatsResponse,
+    DailyVolumeEntry,
+    DailyVolumeResponse,
+    validate_status_transition,
 )
+from app.utils.audit import audit_logged
 
 router = APIRouter()
 
 
 def _build_alert_response(alert) -> AlertResponse:
-    """Build alert response with embedded transaction info."""
-    txn_info = None
-    if alert.transaction:
-        txn_info = AlertTransactionInfo(
-            external_id=alert.transaction.external_id,
-            amount=alert.transaction.amount,
-            currency=alert.transaction.currency,
-            transaction_type=alert.transaction.transaction_type,
-            channel=alert.transaction.channel,
-            merchant_name=alert.transaction.merchant_name,
-            location_country=alert.transaction.location_country,
-            transaction_time=alert.transaction.transaction_time,
-        )
-
-    return AlertResponse(
-        id=alert.id,
-        transaction_id=alert.transaction_id,
-        customer_id=alert.customer_id,
-        risk_score=alert.risk_score,
-        decision=alert.decision,
-        decision_tier=alert.decision_tier,
-        decision_tier_description=alert.decision_tier_description,
-        status=alert.status,
-        triggered_rules=[TriggeredRuleDetail(**r) for r in alert.triggered_rules],
-        processing_time_ms=alert.processing_time_ms,
-        reviewed_by=alert.reviewed_by,
-        reviewed_at=alert.reviewed_at,
-        review_notes=alert.review_notes,
-        created_at=alert.created_at,
-        updated_at=alert.updated_at,
-        transaction=txn_info,
-    )
+    """Build alert response from an ORM model using ``from_attributes``."""
+    return AlertResponse.model_validate(alert)
 
 
 @router.get(
     "",
     response_model=AlertListResponse,
+    response_model_exclude_none=True,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def list_alerts(
@@ -70,20 +58,24 @@ async def list_alerts(
     decision: Decision | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    sort_by: str = Query("created_at", pattern="^(created_at|risk_score|updated_at)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
 ) -> AlertListResponse:
     """
-    List fraud alerts with optional filtering.
+    List fraud alerts with optional filtering and sorting.
 
     - **status**: Filter by review status (pending, confirmed, dismissed, escalated)
     - **customer_id**: Filter by customer
     - **min_score / max_score**: Filter by risk score range
     - **decision**: Filter by detection decision (approve, review, flag)
     - **from_date / to_date**: Filter by creation date range
+    - **sort_by**: Sort field (created_at, risk_score, updated_at)
+    - **sort_order**: Sort direction (asc, desc)
     """
     repo = AlertRepository(db)
-    alerts, total = await repo.get_all(
+    filters = AlertFilter(
         status=status,
         customer_id=customer_id,
         min_score=min_score,
@@ -91,9 +83,12 @@ async def list_alerts(
         decision=decision,
         from_date=from_date,
         to_date=to_date,
+        sort_by=sort_by,
+        sort_order=sort_order,
         page=page,
         size=size,
     )
+    alerts, total = await repo.get_all(filters)
 
     return AlertListResponse(
         items=[_build_alert_response(a) for a in alerts],
@@ -106,39 +101,50 @@ async def list_alerts(
 
 @router.get(
     "/stats/summary",
+    response_model=AlertStatsResponse,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
-async def get_alert_stats(db: DBSession) -> dict:
+async def get_alert_stats(db: DBSession, response: Response) -> AlertStatsResponse:
     """Get alert statistics summary."""
+    response.headers["Cache-Control"] = "private, max-age=30"
     repo = AlertRepository(db)
-    return await repo.get_stats()
+    stats = await repo.get_stats()
+    return AlertStatsResponse(**stats)
 
 
 @router.get(
     "/stats/daily-volume",
+    response_model=DailyVolumeResponse,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def get_daily_volume(
     db: DBSession,
+    response: Response,
     days: int = Query(7, ge=1, le=90),
-) -> list[dict]:
+) -> DailyVolumeResponse:
     """Get alert counts per day for the last N days."""
+    response.headers["Cache-Control"] = "private, max-age=30"
     repo = AlertRepository(db)
-    return await repo.get_daily_volume(days=days)
+    rows = await repo.get_daily_volume(days=days)
+    return DailyVolumeResponse(
+        items=[DailyVolumeEntry(**row) for row in rows],
+        days=days,
+    )
 
 
 @router.get(
     "/{alert_id}",
     response_model=AlertResponse,
+    response_model_exclude_none=True,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def get_alert(
-    alert_id: str,
+    alert_id: UUID,
     db: DBSession,
 ) -> AlertResponse:
     """Get detailed information about a specific alert."""
     repo = AlertRepository(db)
-    alert = await repo.get_by_id(alert_id)
+    alert = await repo.get_by_id(str(alert_id))
 
     if not alert:
         raise HTTPException(
@@ -149,9 +155,13 @@ async def get_alert(
     return _build_alert_response(alert)
 
 
-@router.post("/{alert_id}/review", response_model=AlertReviewResponse)
+@router.post(
+    "/{alert_id}/review",
+    response_model=AlertReviewResponse,
+    dependencies=[Depends(audit_logged("review_alert"))],
+)
 async def review_alert(
-    alert_id: str,
+    alert_id: UUID,
     review_data: AlertReviewRequest,
     current_user: CurrentUser,
     db: DBSession,
@@ -166,20 +176,30 @@ async def review_alert(
     - **escalated**: Needs further investigation
     """
     repo = AlertRepository(db)
+    alert_id_str = str(alert_id)
 
     # Get current alert to verify it exists
-    existing = await repo.get_by_id(alert_id)
+    existing = await repo.get_by_id(alert_id_str)
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Alert with ID '{alert_id}' not found",
+            detail=f"Alert with ID '{alert_id_str}' not found",
         )
 
-    # Use the authenticated user's email as reviewer
-    reviewed_by = current_user.username
+    # M36: Validate status transition
+    try:
+        validate_status_transition(existing.status, review_data.status.value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
+    # M46: Use immutable user ID instead of mutable username
+    reviewed_by = current_user.id
 
     alert = await repo.review(
-        alert_id,
+        alert_id_str,
         status=review_data.status,
         reviewed_by=reviewed_by,
         notes=review_data.notes,

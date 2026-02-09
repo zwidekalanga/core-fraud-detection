@@ -1,5 +1,6 @@
 """Repository for fraud alert data access."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,64 +12,82 @@ from sqlalchemy.types import Date
 from app.models.alert import AlertStatus, Decision, FraudAlert
 
 
+@dataclass
+class AlertFilter:
+    """Filter/sort/pagination params for alert queries (H14: Builder pattern)."""
+
+    status: AlertStatus | None = None
+    customer_id: str | None = None
+    min_score: int | None = None
+    max_score: int | None = None
+    decision: Decision | None = None
+    from_date: datetime | None = None
+    to_date: datetime | None = None
+    sort_by: str = "created_at"
+    sort_order: str = "desc"
+    page: int = 1
+    size: int = 50
+
+
 class AlertRepository:
     """Data access layer for fraud alerts."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    SORTABLE_FIELDS = {
+        "created_at": FraudAlert.created_at,
+        "risk_score": FraudAlert.risk_score,
+        "updated_at": FraudAlert.updated_at,
+    }
+
+    def _apply_filters(self, query, f: AlertFilter):
+        """Apply filter conditions to a query (reused for data + count)."""
+        if f.status:
+            query = query.where(FraudAlert.status == f.status)
+        if f.customer_id:
+            query = query.where(FraudAlert.customer_id == f.customer_id)
+        if f.min_score is not None:
+            query = query.where(FraudAlert.risk_score >= f.min_score)
+        if f.max_score is not None:
+            query = query.where(FraudAlert.risk_score <= f.max_score)
+        if f.decision:
+            query = query.where(FraudAlert.decision == f.decision)
+        if f.from_date:
+            query = query.where(FraudAlert.created_at >= f.from_date)
+        if f.to_date:
+            query = query.where(FraudAlert.created_at <= f.to_date)
+        return query
+
     async def get_all(
         self,
-        *,
-        status: AlertStatus | None = None,
-        customer_id: str | None = None,
-        min_score: int | None = None,
-        max_score: int | None = None,
-        decision: Decision | None = None,
-        from_date: datetime | None = None,
-        to_date: datetime | None = None,
-        page: int = 1,
-        size: int = 50,
+        filters: AlertFilter | None = None,
+        **kwargs,
     ) -> tuple[list[FraudAlert], int]:
-        """Get alerts with filtering and pagination."""
+        """Get alerts with filtering and pagination.
+
+        Accepts an ``AlertFilter`` dataclass **or** the legacy keyword arguments
+        for backwards compatibility.
+        """
+        if filters is None:
+            filters = AlertFilter(**kwargs) if kwargs else AlertFilter()
+
         query = select(FraudAlert).options(selectinload(FraudAlert.transaction))
         count_query = select(func.count()).select_from(FraudAlert)
 
-        # Apply filters
-        if status:
-            query = query.where(FraudAlert.status == status.value)
-            count_query = count_query.where(FraudAlert.status == status.value)
+        query = self._apply_filters(query, filters)
+        count_query = self._apply_filters(count_query, filters)
 
-        if customer_id:
-            query = query.where(FraudAlert.customer_id == customer_id)
-            count_query = count_query.where(FraudAlert.customer_id == customer_id)
-
-        if min_score is not None:
-            query = query.where(FraudAlert.risk_score >= min_score)
-            count_query = count_query.where(FraudAlert.risk_score >= min_score)
-
-        if max_score is not None:
-            query = query.where(FraudAlert.risk_score <= max_score)
-            count_query = count_query.where(FraudAlert.risk_score <= max_score)
-
-        if decision:
-            query = query.where(FraudAlert.decision == decision.value)
-            count_query = count_query.where(FraudAlert.decision == decision.value)
-
-        if from_date:
-            query = query.where(FraudAlert.created_at >= from_date)
-            count_query = count_query.where(FraudAlert.created_at >= from_date)
-
-        if to_date:
-            query = query.where(FraudAlert.created_at <= to_date)
-            count_query = count_query.where(FraudAlert.created_at <= to_date)
-
-        # Get total count
+        # Total count
         total = await self.session.scalar(count_query) or 0
 
-        # Apply pagination and ordering
-        query = query.order_by(FraudAlert.created_at.desc())
-        query = query.offset((page - 1) * size).limit(size)
+        # Ordering
+        sort_column = self.SORTABLE_FIELDS.get(filters.sort_by, FraudAlert.created_at)
+        order = sort_column.asc() if filters.sort_order == "asc" else sort_column.desc()
+        query = query.order_by(order)
+
+        # Pagination
+        query = query.offset((filters.page - 1) * filters.size).limit(filters.size)
 
         result = await self.session.execute(query)
         alerts = list(result.scalars().all())
@@ -102,15 +121,15 @@ class AlertRepository:
             transaction_id=transaction_id,
             customer_id=customer_id,
             risk_score=risk_score,
-            decision=decision.value,
+            decision=decision,
             decision_tier=decision_tier,
             decision_tier_description=decision_tier_description,
             triggered_rules=triggered_rules,
             processing_time_ms=processing_time_ms,
-            status=AlertStatus.PENDING.value,
+            status=AlertStatus.PENDING,
         )
         self.session.add(alert)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(alert)
         return alert
 
@@ -127,12 +146,12 @@ class AlertRepository:
         if not alert:
             return None
 
-        alert.status = status.value
+        alert.status = status
         alert.reviewed_by = reviewed_by
         alert.reviewed_at = datetime.now(UTC)
         alert.review_notes = notes
 
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(alert)
         return alert
 
@@ -141,7 +160,7 @@ class AlertRepository:
         query = (
             select(func.count())
             .select_from(FraudAlert)
-            .where(FraudAlert.status == AlertStatus.PENDING.value)
+            .where(FraudAlert.status == AlertStatus.PENDING)
         )
         return await self.session.scalar(query) or 0
 

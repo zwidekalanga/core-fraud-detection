@@ -5,12 +5,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from jose import jwt
 
-from app.auth.security import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-)
+from app.auth.security import decode_token
 from app.config import get_settings
+from tests.helpers.token_factory import create_access_token, create_refresh_token
 
 
 class TestAccessToken:
