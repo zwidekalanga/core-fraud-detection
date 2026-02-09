@@ -1,0 +1,164 @@
+name: core-fraud-detection
+
+services:
+  fraud-inbound-http:
+    build:
+      context: .
+      target: development
+    container_name: fraud-inbound-http
+    restart: on-failure
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/core_fraud_detection
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./app:/app/app
+      - ./rules:/app/rules
+      - ./alembic:/app/alembic
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - sentinel-network
+
+  fraud-inbound-grpc:
+    build:
+      context: .
+      target: development
+    container_name: fraud-inbound-grpc
+    restart: on-failure
+    command: python -m app.grpc.server
+    ports:
+      - "50051:50051"
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/core_fraud_detection
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      fraud-inbound-http:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c ''import grpc; ch=grpc.insecure_channel("localhost:50051"); grpc.channel_ready_future(ch).result(timeout=5)'' || exit 1',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - sentinel-network
+
+  fraud-inbound-kafka:
+    build:
+      context: .
+      target: development
+    container_name: fraud-inbound-kafka
+    restart: on-failure
+    command: python -m app.consumers.main
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/core_fraud_detection
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_CONSUMER_GROUP=fraud-detection-consumer
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      fraud-inbound-http:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cat /proc/1/cmdline | tr '\\0' ' ' | grep -q 'consumers' || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - sentinel-network
+
+  fraud-outbound-worker:
+    build:
+      context: .
+      target: development
+    container_name: fraud-outbound-worker
+    restart: on-failure
+    command: celery -A app.tasks.celery_app worker --loglevel=info --queues=celery,notifications,maintenance,features
+    depends_on:
+      fraud-inbound-http:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/core_fraud_detection
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+    volumes:
+      - ./app:/app/app
+    healthcheck:
+      test:
+        ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - sentinel-network
+
+  fraud-outbound-scheduler:
+    build:
+      context: .
+      target: development
+    container_name: fraud-outbound-scheduler
+    restart: on-failure
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/core_fraud_detection
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      - fraud-outbound-worker
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cat /proc/1/cmdline | tr '\\0' ' ' | grep -q 'celery' || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - sentinel-network
+
+networks:
+  sentinel-network:
+    name: sentinel-network
+    driver: bridge
