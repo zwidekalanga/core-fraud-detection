@@ -1,0 +1,132 @@
+# Default Fraud Detection Rules
+# These rules are loaded during initial setup
+
+rules:
+  # ==================== AMOUNT RULES ====================
+
+  - code: "AMT_001"
+    name: "High Value Transaction"
+    description: "Transaction exceeds R50,000"
+    category: "amount"
+    severity: "high"
+    score: 60
+    enabled: true
+    conditions:
+      field: "amount"
+      operator: "greater_than"
+      value: 50000
+
+  - code: "AMT_002"
+    name: "Very High Value Transaction"
+    description: "Transaction exceeds R100,000"
+    category: "amount"
+    severity: "critical"
+    score: 80
+    enabled: true
+    conditions:
+      field: "amount"
+      operator: "greater_than"
+      value: 100000
+
+  - code: "AMT_003"
+    name: "Suspiciously Round Amount"
+    description: "Transaction amount is exactly R10,000, R20,000, or R50,000"
+    category: "amount"
+    severity: "medium"
+    score: 30
+    enabled: true
+    conditions:
+      field: "amount"
+      operator: "in"
+      value: [10000, 20000, 50000]
+
+  # ==================== GEOGRAPHIC RULES ====================
+
+  - code: "GEO_001"
+    name: "High-Risk Country"
+    description: "Transaction from high-risk jurisdiction"
+    category: "geographic"
+    severity: "high"
+    score: 65
+    enabled: true
+    conditions:
+      field: "location_country"
+      operator: "in"
+      value: ["NG", "GH", "KE", "RU", "UA", "BY", "IR", "KP"]
+
+  - code: "GEO_002"
+    name: "Sanctioned Country"
+    description: "Transaction from sanctioned country"
+    category: "geographic"
+    severity: "critical"
+    score: 95
+    enabled: true
+    conditions:
+      field: "location_country"
+      operator: "in"
+      value: ["IR", "KP", "SY", "CU"]
+
+  # ==================== BEHAVIORAL RULES ====================
+
+  - code: "BEH_001"
+    name: "High-Risk Merchant Category"
+    description: "Transaction at high-risk merchant type"
+    category: "behavioral"
+    severity: "medium"
+    score: 40
+    enabled: true
+    conditions:
+      field: "merchant_category"
+      operator: "in"
+      value: ["gambling", "crypto", "adult", "gaming"]
+
+  - code: "BEH_002"
+    name: "Online High Value"
+    description: "High value transaction through online channel"
+    category: "behavioral"
+    severity: "high"
+    score: 55
+    enabled: true
+    conditions:
+      all:
+        - field: "channel"
+          operator: "equals"
+          value: "online"
+        - field: "amount"
+          operator: "greater_than"
+          value: 25000
+
+  # ==================== DEVICE RULES ====================
+
+  - code: "DEV_001"
+    name: "Missing Device Fingerprint"
+    description: "Transaction without device identification"
+    category: "device"
+    severity: "medium"
+    score: 35
+    enabled: true
+    conditions:
+      field: "device_fingerprint"
+      operator: "is_null"
+      value: null
+
+  # ==================== COMBINED RULES ====================
+
+  - code: "COMB_001"
+    name: "Foreign Online High Value"
+    description: "Large online transaction from outside South Africa"
+    category: "combined"
+    severity: "high"
+    score: 70
+    enabled: true
+    conditions:
+      all:
+        - field: "channel"
+          operator: "equals"
+          value: "online"
+        - field: "amount"
+          operator: "greater_than"
+          value: 20000
+        - field: "location_country"
+          operator: "not_equals"
+          value: "ZA"
