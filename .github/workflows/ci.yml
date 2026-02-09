@@ -1,0 +1,84 @@
+name: Fraud Detection CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: x64
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run quality checks and tests
+        run: |
+          make quality
+          make test
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            htmlcov/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 30
+    env:
+      ECR_REGISTRY: 123456789.dkr.ecr.af-south-1.amazonaws.com
+      IMAGE_NAME: sentinel/fraud-detection
+      EKS_CLUSTER: sentinel-cluster
+      AWS_REGION: af-south-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: production
+          push: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Simulate EKS deployment
+        run: |
+          echo "============================================"
+          echo "  EKS Deployment (Simulated)"
+          echo "  Service: fraud-detection"
+          echo "  Image:   ${{ env.ECR_REGISTRY }}/fraud-detection:${{ github.sha }}"
+          echo "============================================"
+          echo ""
+          echo "\$ aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}"
+          echo "\$ docker push ${{ env.ECR_REGISTRY }}/fraud-detection:${{ github.sha }}"
+          echo "\$ kubectl set image deployment/fraud-detection fraud-detection=${{ env.ECR_REGISTRY }}/fraud-detection:${{ github.sha }} -n staging"
+          echo "\$ kubectl rollout status deployment/fraud-detection -n staging --timeout=300s"
+          echo "\$ curl -f https://fraud-detection.staging.sentinel.internal/health"
+          echo ""
+          echo "Deployment simulation complete."

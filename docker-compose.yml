@@ -16,6 +16,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE-ME-IN-PRODUCTION}
       - LOG_LEVEL=DEBUG
     volumes:
       - ./app:/app/app
@@ -47,6 +48,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE-ME-IN-PRODUCTION}
       - LOG_LEVEL=DEBUG
     volumes:
       - ./app:/app/app
@@ -80,6 +82,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_CONSUMER_GROUP=fraud-detection-consumer
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE-ME-IN-PRODUCTION}
     volumes:
       - ./app:/app/app
     depends_on:
@@ -114,6 +117,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE-ME-IN-PRODUCTION}
       - SMTP_HOST=mailhog
       - SMTP_PORT=1025
     volumes:
@@ -141,6 +145,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE-ME-IN-PRODUCTION}
     volumes:
       - ./app:/app/app
     depends_on:
