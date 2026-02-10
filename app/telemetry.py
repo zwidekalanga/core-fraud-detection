@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Iterator
+
+import grpc.aio as grpc_aio
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +83,13 @@ async def aspan(name: str, attributes: dict[str, Any] | None = None) -> AsyncIte
 # ---------------------------------------------------------------------------
 
 
-class TracingInterceptor:
+class TracingInterceptor(grpc_aio.ServerInterceptor):
     """Unary-unary gRPC server interceptor that creates a span per RPC.
 
     If OTel is not installed the interceptor still works but records no spans.
     """
 
-    async def intercept_unary_unary(self, continuation, handler_call_details):  # type: ignore[override]
+    async def intercept_service(self, continuation, handler_call_details):
         method = handler_call_details.method
         start = time.perf_counter()
         if _tracer is not None:

@@ -51,6 +51,9 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "bcrypt==4.0.1",
 
+    # Declarative query filtering
+    "fastapi-filter[sqlalchemy]>=2.0.0",
+
     # Rate Limiting
     "slowapi>=0.1.9",
 

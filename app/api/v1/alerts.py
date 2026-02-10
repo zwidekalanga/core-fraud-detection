@@ -13,16 +13,16 @@ If this service is ever exposed to external consumers or multi-tenant
 access, alerts MUST be scoped by organisation / tenant ID.
 """
 
-from datetime import datetime
 from math import ceil
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi_filter import FilterDepends
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.dependencies import DBSession
-from app.models.alert import AlertStatus, Decision
-from app.repositories.alert_repository import AlertFilter, AlertRepository
+from app.filters.alert import AlertFilter
+from app.repositories.alert_repository import AlertRepository
 from app.schemas.alert import (
     AlertListResponse,
     AlertResponse,
@@ -51,15 +51,7 @@ def _build_alert_response(alert) -> AlertResponse:
 )
 async def list_alerts(
     db: DBSession,
-    status: AlertStatus | None = None,
-    customer_id: str | None = None,
-    min_score: int | None = Query(None, ge=0, le=100),
-    max_score: int | None = Query(None, ge=0, le=100),
-    decision: Decision | None = None,
-    from_date: datetime | None = None,
-    to_date: datetime | None = None,
-    sort_by: str = Query("created_at", pattern="^(created_at|risk_score|updated_at)$"),
-    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    filters: AlertFilter = FilterDepends(AlertFilter),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
 ) -> AlertListResponse:
@@ -68,27 +60,13 @@ async def list_alerts(
 
     - **status**: Filter by review status (pending, confirmed, dismissed, escalated)
     - **customer_id**: Filter by customer
-    - **min_score / max_score**: Filter by risk score range
+    - **risk_score__gte / risk_score__lte**: Filter by risk score range
     - **decision**: Filter by detection decision (approve, review, flag)
-    - **from_date / to_date**: Filter by creation date range
-    - **sort_by**: Sort field (created_at, risk_score, updated_at)
-    - **sort_order**: Sort direction (asc, desc)
+    - **created_at__gte / created_at__lte**: Filter by creation date range
+    - **order_by**: Sort fields (e.g. ``-created_at``, ``risk_score``)
     """
     repo = AlertRepository(db)
-    filters = AlertFilter(
-        status=status,
-        customer_id=customer_id,
-        min_score=min_score,
-        max_score=max_score,
-        decision=decision,
-        from_date=from_date,
-        to_date=to_date,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        page=page,
-        size=size,
-    )
-    alerts, total = await repo.get_all(filters)
+    alerts, total = await repo.get_all(filters, page=page, size=size)
 
     return AlertListResponse(
         items=[_build_alert_response(a) for a in alerts],

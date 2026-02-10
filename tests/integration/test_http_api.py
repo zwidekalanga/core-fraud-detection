@@ -6,13 +6,10 @@ with database repositories mocked so that no live Postgres is required.
 
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.models.alert import AlertStatus, Decision
 from tests.conftest import _make_alert_model, _make_rule_model, make_rule_payload
 
 pytestmark = pytest.mark.asyncio

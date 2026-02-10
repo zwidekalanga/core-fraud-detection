@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.rule import FraudRule, RuleCategory
+from app.filters.rule import RuleFilter
+from app.models.rule import FraudRule
 from app.schemas.rule import RuleCreate, RuleUpdate
 
 
@@ -26,41 +27,33 @@ class RuleRepository:
 
     async def get_all(
         self,
-        *,
-        enabled_only: bool = False,
-        category: RuleCategory | None = None,
+        filters: RuleFilter,
         page: int = 1,
         size: int = 50,
     ) -> tuple[list[FraudRule], int]:
-        """Get all rules with optional filtering and pagination."""
-        query = select(FraudRule)
-        count_query = select(func.count()).select_from(FraudRule)
+        """Get all rules with declarative filtering and pagination."""
+        query = filters.filter(select(FraudRule))
+        count_query = filters.filter(select(func.count()).select_from(FraudRule))
 
-        # Apply filters
-        if enabled_only:
+        # Temporal bounds: when enabled=True, also enforce effective_from/to
+        if filters.enabled is True:
             now = datetime.now(UTC)
-            query = query.where(
-                FraudRule.enabled == True,  # noqa: E712
+            temporal = [
                 (FraudRule.effective_from.is_(None)) | (FraudRule.effective_from <= now),
                 (FraudRule.effective_to.is_(None)) | (FraudRule.effective_to >= now),
-            )
-            count_query = count_query.where(FraudRule.enabled == True)  # noqa: E712
+            ]
+            for cond in temporal:
+                query = query.where(cond)
 
-        if category:
-            query = query.where(FraudRule.category == category)
-            count_query = count_query.where(FraudRule.category == category)
-
-        # Get total count
         total = await self.session.scalar(count_query) or 0
 
-        # Apply pagination
-        query = query.order_by(FraudRule.category, FraudRule.code)
+        query = filters.sort(query)
+        if not filters.order_by:
+            query = query.order_by(FraudRule.category, FraudRule.code)
         query = query.offset((page - 1) * size).limit(size)
 
         result = await self.session.execute(query)
-        rules = list(result.scalars().all())
-
-        return rules, total
+        return list(result.scalars().all()), total
 
     async def get_by_code(self, code: str) -> FraudRule | None:
         """Get a rule by its code."""

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
-from tests.helpers.token_factory import create_access_token, create_refresh_token
+from tests.helpers.token_factory import create_refresh_token
 
 pytestmark = pytest.mark.asyncio
 

@@ -2,11 +2,12 @@
 
 from math import ceil
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi_filter import FilterDepends
 
 from app.auth.dependencies import require_role
 from app.dependencies import DBSession
-from app.models.rule import RuleCategory
+from app.filters.rule import RuleFilter
 from app.repositories.rule_repository import DuplicateRuleError, RuleRepository
 from app.schemas.rule import (
     RuleCreate,
@@ -29,28 +30,19 @@ _RULE_CODE = Path(pattern=r"^[A-Z]{2,4}_\d{3}$", description="Rule code (e.g. AM
 )
 async def list_rules(
     db: DBSession,
-    enabled: bool | None = None,
-    category: RuleCategory | None = None,
-    page: int = 1,
-    size: int = 50,
+    filters: RuleFilter = FilterDepends(RuleFilter),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
 ) -> RuleListResponse:
     """
     List all fraud rules with optional filtering.
 
-    - **enabled**: Filter by enabled status
+    - **enabled**: Filter by enabled status (also enforces temporal bounds)
     - **category**: Filter by rule category
-    - **page**: Page number (1-indexed)
-    - **size**: Items per page (max 100)
+    - **order_by**: Sort fields (e.g. ``category``, ``-code``)
     """
-    size = min(size, 100)  # Cap at 100
-
     repo = RuleRepository(db)
-    rules, total = await repo.get_all(
-        enabled_only=enabled if enabled else False,
-        category=category,
-        page=page,
-        size=size,
-    )
+    rules, total = await repo.get_all(filters, page=page, size=size)
 
     return RuleListResponse(
         items=[RuleResponse.model_validate(r) for r in rules],

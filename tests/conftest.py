@@ -5,13 +5,12 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.config import get_settings
 from app.main import app
 from app.models.alert import AlertStatus, Decision
 from tests.helpers.token_factory import create_access_token

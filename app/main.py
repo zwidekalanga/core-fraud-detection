@@ -14,8 +14,6 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.types import ASGIApp
 
 from app.api.v1.router import api_router
 from app.config import get_settings
