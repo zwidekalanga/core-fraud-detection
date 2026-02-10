@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,8 +43,26 @@ class FraudRule(Base, TimestampMixin):
     # Rule metadata
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    category: Mapped[str] = mapped_column(String(50), nullable=False)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    category: Mapped[str] = mapped_column(
+        SAEnum(
+            RuleCategory,
+            name="rule_category",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        nullable=False,
+    )
+    severity: Mapped[str] = mapped_column(
+        SAEnum(
+            Severity,
+            name="severity",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        nullable=False,
+    )
 
     # Scoring
     score: Mapped[int] = mapped_column(Integer, nullable=False)

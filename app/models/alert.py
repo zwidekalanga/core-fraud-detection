@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,12 +41,26 @@ class FraudAlert(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
 
+    # Human-readable reference number (e.g. FRD-00142)
+    reference_number: Mapped[str | None] = mapped_column(
+        String(20), unique=True, nullable=True, index=True
+    )
+
     # Customer reference (denormalized for faster queries)
     customer_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
 
     # Risk assessment results
     risk_score: Mapped[int] = mapped_column(Integer, nullable=False)
-    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    decision: Mapped[str] = mapped_column(
+        SAEnum(
+            Decision,
+            name="decision",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        nullable=False,
+    )
     decision_tier: Mapped[str | None] = mapped_column(String(50), nullable=True)
     decision_tier_description: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
@@ -59,11 +74,20 @@ class FraudAlert(Base, UUIDMixin, TimestampMixin):
 
     # Review status
     status: Mapped[str] = mapped_column(
-        String(20), default=AlertStatus.PENDING.value, nullable=False
+        SAEnum(
+            AlertStatus,
+            name="alert_status",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda e: [member.value for member in e],
+        ),
+        default=AlertStatus.PENDING.value,
+        nullable=False,
     )
 
     # Review details
     reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reviewed_by_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -4,6 +4,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.core.feature_service import CustomerFeatures, FeatureService
 
@@ -87,7 +88,7 @@ class TestGetCustomerFeatures:
         assert features.avg_amount == 0.0
 
     async def test_returns_defaults_on_redis_error(self, feature_service, mock_redis):
-        mock_redis.get.side_effect = ConnectionError("Redis unavailable")
+        mock_redis.get.side_effect = RedisConnectionError("Redis unavailable")
 
         features = await feature_service.get_customer_features("cust-err")
 
@@ -124,7 +125,7 @@ class TestGetMerchantRisk:
         assert score == 0
 
     async def test_returns_zero_on_redis_error(self, feature_service, mock_redis):
-        mock_redis.get.side_effect = ConnectionError("Redis down")
+        mock_redis.get.side_effect = RedisConnectionError("Redis down")
 
         score = await feature_service.get_merchant_risk("MERCH-ERR")
 
@@ -136,6 +137,58 @@ class TestGetMerchantRisk:
         score = await feature_service.get_merchant_risk("MERCH-BAD")
 
         assert score == 0
+
+    # --- T-02: Additional edge cases ---
+
+    async def test_returns_zero_on_corrupt_json(self, feature_service, mock_redis):
+        """Corrupt (non-JSON) cached value returns 0 gracefully."""
+        mock_redis.get.return_value = "not-valid-json{{{"
+
+        score = await feature_service.get_merchant_risk("MERCH-CORRUPT")
+
+        assert score == 0
+
+    async def test_returns_boundary_score_100(self, feature_service, mock_redis):
+        """Maximum risk score (100) is returned correctly."""
+        mock_redis.get.return_value = json.dumps({"risk_score": 100})
+
+        score = await feature_service.get_merchant_risk("MERCH-MAX")
+
+        assert score == 100
+
+    async def test_returns_zero_risk_score_from_cache(self, feature_service, mock_redis):
+        """Explicit zero risk score in cache is returned as 0 (not treated as missing)."""
+        mock_redis.get.return_value = json.dumps({"risk_score": 0})
+
+        score = await feature_service.get_merchant_risk("MERCH-ZERO")
+
+        assert score == 0
+
+    async def test_returns_zero_for_negative_risk_score(self, feature_service, mock_redis):
+        """Negative risk score in cache is returned as-is (caller validates)."""
+        mock_redis.get.return_value = json.dumps({"risk_score": -5})
+
+        score = await feature_service.get_merchant_risk("MERCH-NEG")
+
+        assert score == -5
+
+    async def test_returns_zero_for_empty_string_merchant(self, feature_service, mock_redis):
+        """Empty merchant ID is handled without error."""
+        mock_redis.get.return_value = None
+
+        score = await feature_service.get_merchant_risk("")
+
+        mock_redis.get.assert_called_once_with("merchant:risk:")
+        assert score == 0
+
+    async def test_returns_default_for_non_numeric_risk(self, feature_service, mock_redis):
+        """Non-numeric risk_score value falls back to dict.get default (0)."""
+        mock_redis.get.return_value = json.dumps({"risk_score": "high"})
+
+        score = await feature_service.get_merchant_risk("MERCH-STR")
+
+        # dict.get returns the string; caller responsibility to validate
+        assert score == "high"
 
 
 class TestEnrichTransaction:

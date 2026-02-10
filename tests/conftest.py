@@ -1,18 +1,23 @@
 """Shared test fixtures for fraud-detection service."""
 
-import uuid
-from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
-from decimal import Decimal
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+import os
 
-import fakeredis.aioredis
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+# Set test JWT secret before any app imports trigger Settings() validation.
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-for-unit-tests")
 
-from app.main import app
-from app.models.alert import AlertStatus, Decision
+import uuid  # noqa: E402
+from collections.abc import AsyncGenerator  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+import fakeredis.aioredis  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+from app.models.alert import AlertStatus, Decision  # noqa: E402
 from tests.helpers.token_factory import create_access_token
 
 # ---------------------------------------------------------------------------
@@ -48,20 +53,11 @@ def _make_mock_session():
 def _make_mock_session_factory():
     """Return a callable that mimics ``async_sessionmaker().__call__()``."""
     mock_session = _make_mock_session()
-
-    class _Factory:
-        """Mimic async context manager returned by sessionmaker()."""
-
-        def __call__(self):
-            return self
-
-        async def __aenter__(self):
-            return mock_session
-
-        async def __aexit__(self, *args):
-            pass
-
-    return _Factory(), mock_session
+    factory = MagicMock()
+    ctx = AsyncMock()
+    ctx.__aenter__.return_value = mock_session
+    factory.return_value = ctx
+    return factory, mock_session
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +221,9 @@ def _make_alert_model(**overrides):
             }
         ],
         "processing_time_ms": 12.5,
+        "reference_number": None,
         "reviewed_by": None,
+        "reviewed_by_username": None,
         "reviewed_at": None,
         "review_notes": None,
         "created_at": _NOW,

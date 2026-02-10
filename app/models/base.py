@@ -1,4 +1,5 @@
 """SQLAlchemy base model and common mixins."""
+
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -14,6 +15,7 @@ class Base(DeclarativeBase):
     # Enable JSON type handling
     type_annotation_map = {
         dict[str, Any]: "JSONB",
+        list[dict[str, Any]]: "JSONB",
     }
 
 

@@ -22,6 +22,7 @@ async def main() -> None:
     logger.info("Consumer group: %s", settings.kafka_consumer_group)
 
     infra = InfrastructureContainer.from_settings(settings)
+    await infra.verify()
 
     try:
         consumer = TransactionConsumer(

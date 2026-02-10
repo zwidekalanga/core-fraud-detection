@@ -1,13 +1,16 @@
 """Pydantic schemas for transactions."""
+
+import ipaddress
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class TransactionEvaluateRequest(BaseModel):
     """Schema for transaction evaluation request."""
+
     external_id: str = Field(..., min_length=1, max_length=100)
     customer_id: str = Field(..., min_length=1)
     amount: Decimal = Field(..., gt=0)
@@ -16,6 +19,8 @@ class TransactionEvaluateRequest(BaseModel):
     channel: str = Field(..., min_length=1)
 
     # Optional fields
+    account_id: str | None = None
+    account_number: str | None = None
     merchant_id: str | None = None
     merchant_name: str | None = None
     merchant_category: str | None = None
@@ -26,9 +31,21 @@ class TransactionEvaluateRequest(BaseModel):
     transaction_time: datetime | None = None
     extra_data: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("ip_address", mode="before")
+    @classmethod
+    def validate_ip_address(cls, v: str | None) -> str | None:
+        """Reject malformed IP addresses at the schema level."""
+        if v is not None:
+            try:
+                ipaddress.ip_address(v)
+            except ValueError:
+                raise ValueError(f"'{v}' is not a valid IPv4 or IPv6 address")
+        return v
+
 
 class TriggeredRuleInfo(BaseModel):
     """Information about a triggered rule."""
+
     code: str
     name: str
     category: str
@@ -39,6 +56,7 @@ class TriggeredRuleInfo(BaseModel):
 
 class EvaluationResponse(BaseModel):
     """Schema for evaluation response."""
+
     transaction_id: str
     external_id: str
     risk_score: int

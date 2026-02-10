@@ -6,10 +6,14 @@ These tests verify the /me endpoint, token validation, and RBAC enforcement.
 """
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.main import app
+from app.providers import get_alert_service, get_rule_service
+from app.services.alert_service import AlertService
+from app.services.rule_service import RuleService
 from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
 from tests.helpers.token_factory import create_refresh_token
 
@@ -24,6 +28,18 @@ pytestmark = pytest.mark.asyncio
 def _make_headers(role: str, username: str) -> dict[str, str]:
     """Shorthand for creating an Authorization header."""
     return _auth_headers(role, username)
+
+
+def _mock_rule_service() -> RuleService:
+    svc = RuleService.__new__(RuleService)
+    svc._repo = AsyncMock()
+    return svc
+
+
+def _mock_alert_service() -> AlertService:
+    svc = AlertService.__new__(AlertService)
+    svc._repo = AsyncMock()
+    return svc
 
 
 # ======================================================================
@@ -86,17 +102,25 @@ class TestRBACEnforcement:
     async def test_viewer_can_list_alerts(self, client):
         """Viewers should be able to read alerts."""
         headers = _make_headers("viewer", "viewer")
-        with patch("app.api.v1.alerts.AlertRepository") as MockRepo:
-            MockRepo.return_value.get_all = AsyncMock(return_value=([], 0))
+        svc = _mock_alert_service()
+        svc._repo.get_all = AsyncMock(return_value=([], 0))
+        app.dependency_overrides[get_alert_service] = lambda: svc
+        try:
             resp = await client.get("/api/v1/alerts", headers=headers)
+        finally:
+            app.dependency_overrides.pop(get_alert_service, None)
         assert resp.status_code == 200
 
     async def test_viewer_can_list_rules(self, client):
         """Viewers should be able to read rules."""
         headers = _make_headers("viewer", "viewer")
-        with patch("app.api.v1.rules.RuleRepository") as MockRepo:
-            MockRepo.return_value.get_all = AsyncMock(return_value=([], 0))
+        svc = _mock_rule_service()
+        svc._repo.get_all = AsyncMock(return_value=([], 0))
+        app.dependency_overrides[get_rule_service] = lambda: svc
+        try:
             resp = await client.get("/api/v1/rules", headers=headers)
+        finally:
+            app.dependency_overrides.pop(get_rule_service, None)
         assert resp.status_code == 200
 
     async def test_analyst_cannot_create_rule(self, client):
@@ -118,11 +142,13 @@ class TestRBACEnforcement:
         headers = _make_headers("admin", "admin")
         payload = make_rule_payload()
         created = _make_rule_model(**payload)
-        with patch("app.api.v1.rules.RuleRepository") as MockRepo:
-            repo = MockRepo.return_value
-            repo.get_by_code = AsyncMock(return_value=None)
-            repo.create = AsyncMock(return_value=created)
+        svc = _mock_rule_service()
+        svc._repo.create = AsyncMock(return_value=created)
+        app.dependency_overrides[get_rule_service] = lambda: svc
+        try:
             resp = await client.post("/api/v1/rules", json=payload, headers=headers)
+        finally:
+            app.dependency_overrides.pop(get_rule_service, None)
         assert resp.status_code == 201
 
     async def test_unauthenticated_cannot_access_rules(self, client):

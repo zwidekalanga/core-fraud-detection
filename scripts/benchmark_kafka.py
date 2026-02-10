@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Reuse the transaction generator
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import scripts.generate_transactions as _txn_module
-from scripts.generate_transactions import _load_customer_ids, generate_transaction
+from scripts.generate_transactions import _load_customer_accounts, generate_transaction
 
 # ---------------------------------------------------------------------------
 # Configuration — uses app settings when running inside Docker,
@@ -52,8 +52,9 @@ async def publish_transactions(count: int, high_risk_pct: float) -> list[str]:
 
     Returns the list of external_ids for verification.
     """
-    # Ensure generate_transaction() uses real banking customer IDs
-    _txn_module.CUSTOMERS = await _load_customer_ids()
+    # Ensure generate_transaction() uses real banking accounts (customer_id + account_id + account_number)
+    _txn_module.CUSTOMER_ACCOUNTS = await _load_customer_accounts()
+    _txn_module.CUSTOMERS = list({a["customer_id"] for a in _txn_module.CUSTOMER_ACCOUNTS}) if _txn_module.CUSTOMER_ACCOUNTS else _txn_module._FALLBACK_CUSTOMERS
 
     producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,

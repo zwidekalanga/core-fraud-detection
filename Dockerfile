@@ -70,8 +70,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy all application code
-COPY . .
+# Copy only production-relevant files (exclude tests/, scripts/, Makefile, etc.)
+COPY pyproject.toml ./
+COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
+COPY rules/ ./rules/
+COPY entrypoint.sh ./
 
 # Install production dependencies only
 RUN uv pip install --system -e .
@@ -88,6 +93,9 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# Entrypoint runs migrations then exec's CMD
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Production command with multiple workers
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

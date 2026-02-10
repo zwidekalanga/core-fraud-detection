@@ -28,8 +28,10 @@ BANKING_DATABASE_URL = (
 # Fallback random customer IDs (used only when the banking DB is unreachable)
 _FALLBACK_CUSTOMERS = [str(uuid.uuid4()) for _ in range(10)]
 
-# Will be populated at runtime by `_load_customer_ids()`
+# Will be populated at runtime by `_load_customer_accounts()`
+# Each entry: {"customer_id": str, "account_id": str, "account_number": str}
 CUSTOMERS: list[str] = []
+CUSTOMER_ACCOUNTS: list[dict[str, str]] = []
 
 
 async def _load_customer_ids() -> list[str]:
@@ -37,6 +39,20 @@ async def _load_customer_ids() -> list[str]:
 
     Falls back to random UUIDs when the banking DB is unavailable (e.g. tests).
     """
+    accounts = await _load_customer_accounts()
+    return list({a["customer_id"] for a in accounts}) if accounts else _FALLBACK_CUSTOMERS
+
+
+async def _load_customer_accounts() -> list[dict[str, str]]:
+    """Fetch customer IDs with their account IDs and account numbers from core_banking.
+
+    Returns a list of dicts with customer_id, account_id, and account_number.
+    Falls back to empty list when the banking DB is unavailable.
+    """
+    global CUSTOMER_ACCOUNTS  # noqa: PLW0603
+    if CUSTOMER_ACCOUNTS:
+        return CUSTOMER_ACCOUNTS
+
     try:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -45,21 +61,33 @@ async def _load_customer_ids() -> list[str]:
         factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
         async with factory() as session:
-            result = await session.execute(text("SELECT id FROM customers"))
-            ids = [str(row[0]) for row in result.all()]
+            result = await session.execute(
+                text("SELECT a.customer_id, a.id, a.account_number FROM accounts a")
+            )
+            rows = result.all()
 
         await engine.dispose()
 
-        if ids:
-            logger.info("Loaded %d customer IDs from core_banking", len(ids))
-            return ids
+        if rows:
+            CUSTOMER_ACCOUNTS = [
+                {
+                    "customer_id": str(row[0]),
+                    "account_id": str(row[1]),
+                    "account_number": str(row[2]),
+                }
+                for row in rows
+            ]
+            logger.info(
+                "Loaded %d customer accounts from core_banking", len(CUSTOMER_ACCOUNTS)
+            )
+            return CUSTOMER_ACCOUNTS
         else:
-            logger.warning("No customers found in core_banking — using fallback UUIDs")
-            return _FALLBACK_CUSTOMERS
+            logger.warning("No accounts found in core_banking — using fallback UUIDs")
+            return []
 
     except Exception as exc:
         logger.warning("Cannot reach core_banking DB (%s) — using fallback UUIDs", exc)
-        return _FALLBACK_CUSTOMERS
+        return []
 
 CHANNELS = ["card", "eft", "mobile", "online", "atm"]
 
@@ -92,7 +120,16 @@ COUNTRIES = {
 
 def generate_transaction(high_risk: bool = False) -> dict:
     """Generate a random transaction."""
-    customer_id = random.choice(CUSTOMERS)
+    # Pick a random account (includes customer_id, account_id, account_number)
+    if CUSTOMER_ACCOUNTS:
+        acct = random.choice(CUSTOMER_ACCOUNTS)
+        customer_id = acct["customer_id"]
+        account_id = acct["account_id"]
+        account_number = acct["account_number"]
+    else:
+        customer_id = random.choice(CUSTOMERS) if CUSTOMERS else str(uuid.uuid4())
+        account_id = None
+        account_number = None
     merchant = random.choice(MERCHANTS)
 
     # Determine amount
@@ -122,6 +159,8 @@ def generate_transaction(high_risk: bool = False) -> dict:
     return {
         "external_id": f"TXN-{uuid.uuid4().hex[:8].upper()}",
         "customer_id": customer_id,
+        "account_id": account_id,
+        "account_number": account_number,
         "amount": round(amount, 2),
         "currency": "ZAR",
         "transaction_type": random.choice(TRANSACTION_TYPES),
@@ -145,8 +184,9 @@ def generate_transaction(high_risk: bool = False) -> dict:
 
 async def produce_transactions(count: int, high_risk_pct: float = 0.2) -> None:
     """Generate and publish transactions to Kafka."""
-    global CUSTOMERS  # noqa: PLW0603
-    CUSTOMERS = await _load_customer_ids()
+    global CUSTOMERS, CUSTOMER_ACCOUNTS  # noqa: PLW0603
+    CUSTOMER_ACCOUNTS = await _load_customer_accounts()
+    CUSTOMERS = list({a["customer_id"] for a in CUSTOMER_ACCOUNTS}) if CUSTOMER_ACCOUNTS else _FALLBACK_CUSTOMERS
 
     settings = get_settings()
 

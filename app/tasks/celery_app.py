@@ -35,8 +35,3 @@ celery_app.conf.update(
     # Task routes
     task_routes={},
 )
-
-# Auto-discover tasks from task modules within the app package.
-# Add module paths here as Celery tasks are implemented,
-# e.g. ["app.tasks.alerts", "app.tasks.reports"].
-celery_app.autodiscover_tasks(["app.tasks"])

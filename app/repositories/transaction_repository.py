@@ -33,6 +33,8 @@ class TransactionRepository:
         transaction = Transaction(
             external_id=txn_data.external_id,
             customer_id=txn_data.customer_id,
+            account_id=txn_data.account_id,
+            account_number=txn_data.account_number,
             amount=txn_data.amount,
             currency=txn_data.currency,
             transaction_type=txn_data.transaction_type,
@@ -52,42 +54,43 @@ class TransactionRepository:
         return transaction
 
     async def upsert(self, txn_data: TransactionEvaluateRequest) -> Transaction:
-        """Insert or ignore a transaction (idempotent on external_id).
+        """Insert or return existing transaction (idempotent on external_id).
 
-        Returns the existing or newly-created transaction. Raises
-        ``RuntimeError`` if the row cannot be fetched after the upsert
-        (should not happen under normal operation).
+        Uses ``ON CONFLICT DO UPDATE ... RETURNING`` to fetch the row in a
+        single round-trip instead of INSERT + SELECT.
         """
-        stmt = (
-            insert(Transaction)
-            .values(
-                external_id=txn_data.external_id,
-                customer_id=txn_data.customer_id,
-                amount=txn_data.amount,
-                currency=txn_data.currency,
-                transaction_type=txn_data.transaction_type,
-                channel=txn_data.channel,
-                merchant_id=txn_data.merchant_id,
-                merchant_name=txn_data.merchant_name,
-                merchant_category=txn_data.merchant_category,
-                location_country=txn_data.location_country,
-                location_city=txn_data.location_city,
-                device_fingerprint=txn_data.device_fingerprint,
-                ip_address=txn_data.ip_address,
-                transaction_time=txn_data.transaction_time or datetime.now(UTC),
-                extra_data=txn_data.extra_data,
-            )
-            .on_conflict_do_nothing(index_elements=["external_id"])
+        values = dict(
+            external_id=txn_data.external_id,
+            customer_id=txn_data.customer_id,
+            account_id=txn_data.account_id,
+            account_number=txn_data.account_number,
+            amount=txn_data.amount,
+            currency=txn_data.currency,
+            transaction_type=txn_data.transaction_type,
+            channel=txn_data.channel,
+            merchant_id=txn_data.merchant_id,
+            merchant_name=txn_data.merchant_name,
+            merchant_category=txn_data.merchant_category,
+            location_country=txn_data.location_country,
+            location_city=txn_data.location_city,
+            device_fingerprint=txn_data.device_fingerprint,
+            ip_address=txn_data.ip_address,
+            transaction_time=txn_data.transaction_time or datetime.now(UTC),
+            extra_data=txn_data.extra_data,
         )
 
-        await self.session.execute(stmt)
-        await self.session.flush()
-
-        # Fetch the record (either new or existing)
-        txn = await self.get_by_external_id(txn_data.external_id)
-        if txn is None:
-            raise RuntimeError(
-                f"Transaction upsert succeeded but fetch failed for "
-                f"external_id={txn_data.external_id}"
+        stmt = (
+            insert(Transaction)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=["external_id"],
+                # No-op SET so RETURNING works on the existing row
+                set_={"external_id": txn_data.external_id},
             )
+            .returning(Transaction)
+        )
+
+        result = await self.session.execute(stmt)
+        txn = result.scalar_one()
+        await self.session.flush()
         return txn

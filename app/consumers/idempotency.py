@@ -151,12 +151,14 @@ class IdempotentProcessor:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        if exc_type is None and self.should_process and self._result is not None:
-            # Mark as processed if successful
-            await self.service.mark_processed(self.message_type, self.external_id, self._result)
-
-        if self._lock_acquired:
-            await self.service.release_lock(self.message_type, self.external_id)
+        try:
+            if exc_type is None and self.should_process and self._result is not None:
+                # Mark as processed if successful
+                await self.service.mark_processed(self.message_type, self.external_id, self._result)
+        finally:
+            # Always release the lock, even if mark_processed() fails
+            if self._lock_acquired:
+                await self.service.release_lock(self.message_type, self.external_id)
 
     def set_result(self, result: dict[str, Any]) -> None:
         """Set the processing result to be stored."""
