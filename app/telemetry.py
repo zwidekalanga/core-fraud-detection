@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, AsyncIterator, Iterator
+from typing import Any
 
 import grpc.aio as grpc_aio
 
@@ -46,7 +47,7 @@ def init_telemetry(service_name: str = _SERVICE_NAME) -> None:
     is not installed this is a silent no-op.
     """
     global _tracer
-    if not _HAS_OTEL:
+    if not _HAS_OTEL or trace is None:
         logger.debug("opentelemetry not installed — tracing disabled")
         return
     _tracer = trace.get_tracer(service_name)

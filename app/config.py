@@ -1,6 +1,6 @@
 """Application configuration using pydantic-settings."""
 
-from functools import lru_cache
+import warnings
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -43,15 +43,12 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # Rules Engine
-    scoring_strategy: Literal["sum", "weighted", "max"] = "weighted"
-    threshold_approve: int = 30
-    threshold_review: int = 70
     rule_cache_ttl: int = 300  # seconds
 
     # JWT / Auth
     jwt_secret_key: str = Field(
-        default="CHANGE-ME-IN-PRODUCTION",
-        description="JWT signing secret. MUST be overridden in production.",
+        default="",
+        description="JWT signing secret. MUST be set via JWT_SECRET_KEY env var.",
     )
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
@@ -75,15 +72,16 @@ class Settings(BaseSettings):
     def enforce_jwt_secret_strength(self) -> "Settings":
         """Enforce JWT secret requirements based on environment.
 
-        - Non-dev: reject the placeholder secret AND require >= 32 characters.
+        - All envs: reject empty secret (must be explicitly configured).
+        - Non-dev: require >= 32 characters.
         - Dev: emit a warning for short secrets so local runs aren't blocked.
         """
+        if not self.jwt_secret_key:
+            raise ValueError(
+                "jwt_secret_key must be set via the JWT_SECRET_KEY environment "
+                "variable or .env file"
+            )
         if self.environment != "development":
-            if self.jwt_secret_key == "CHANGE-ME-IN-PRODUCTION":
-                raise ValueError(
-                    "jwt_secret_key must be changed from its default value "
-                    "in staging/production environments"
-                )
             if len(self.jwt_secret_key) < 32:
                 raise ValueError(
                     "jwt_secret_key must be at least 32 characters "
@@ -91,8 +89,6 @@ class Settings(BaseSettings):
                 )
         else:
             if len(self.jwt_secret_key) < 32:
-                import warnings
-
                 warnings.warn(
                     "jwt_secret_key is shorter than 32 characters — "
                     "use a strong, randomly-generated secret in production",
@@ -112,7 +108,18 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
 
-@lru_cache
+_settings: Settings | None = None
+
+
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    global _settings  # noqa: PLW0603
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+def clear_settings() -> None:
+    """Reset the cached settings — intended for test isolation only."""
+    global _settings  # noqa: PLW0603
+    _settings = None

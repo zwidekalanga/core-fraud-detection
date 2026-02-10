@@ -1,6 +1,7 @@
 """Unit tests for auth/dependencies.py — stateless JWT token validation and RBAC."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -8,6 +9,11 @@ from jose import jwt
 
 from app.config import get_settings
 from tests.helpers.token_factory import create_access_token, create_refresh_token
+
+
+def _fake_request():
+    """Return a minimal Request-like object with no Redis (deny-list skipped)."""
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None)))
 
 
 class TestTokenUser:
@@ -51,7 +57,7 @@ class TestGetCurrentUser:
         from app.auth.dependencies import get_current_user
 
         token = create_access_token("user-abc", "analyst", username="analyst", email="a@test.com")
-        user = await get_current_user(token)
+        user = await get_current_user(_fake_request(), token)
 
         assert user.id == "user-abc"
         assert user.username == "analyst"
@@ -64,7 +70,7 @@ class TestGetCurrentUser:
 
         # Create a token without username/email (old format)
         token = create_access_token("user-old", "viewer")
-        user = await get_current_user(token)
+        user = await get_current_user(_fake_request(), token)
 
         assert user.id == "user-old"
         assert user.role == "viewer"
@@ -83,7 +89,7 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token)
+            await get_current_user(_fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_refresh_token_rejected_as_access(self, settings):  # noqa: ARG002
@@ -93,7 +99,7 @@ class TestGetCurrentUser:
         token = create_refresh_token("user-r", "admin")
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token)
+            await get_current_user(_fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_tampered_token_raises_401(self, settings):  # noqa: ARG002
@@ -103,14 +109,14 @@ class TestGetCurrentUser:
         tampered = token[:-5] + "XXXXX"
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(tampered)
+            await get_current_user(_fake_request(), tampered)
         assert exc.value.status_code == 401
 
     async def test_invalid_token_string_raises_401(self):
         from app.auth.dependencies import get_current_user
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user("not.a.valid.jwt")
+            await get_current_user(_fake_request(), "not.a.valid.jwt")
         assert exc.value.status_code == 401
 
     async def test_token_missing_sub_raises_401(self, settings):
@@ -124,7 +130,7 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token)
+            await get_current_user(_fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_token_wrong_secret_raises_401(self, settings):
@@ -139,7 +145,7 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, "wrong-secret", algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token)
+            await get_current_user(_fake_request(), token)
         assert exc.value.status_code == 401
 
 

@@ -1,34 +1,60 @@
 """Dependency injection for FastAPI."""
 
+import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Request
 from redis.asyncio import Redis
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import QueuePool
 
 from app.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lifespan helpers — called from main.py to create & destroy shared resources
 # ---------------------------------------------------------------------------
 
 
+def _register_pool_events(engine: AsyncEngine) -> None:
+    """Attach pool event listeners for observability."""
+    pool = engine.pool
+    if not isinstance(pool, QueuePool):
+        return
+
+    @event.listens_for(pool, "checkout")
+    def _on_checkout(_dbapi_conn, _conn_record, _conn_proxy):
+        logger.debug("Pool checkout — size=%s checked_out=%s", pool.size(), pool.checkedout())
+
+    @event.listens_for(pool, "checkin")
+    def _on_checkin(_dbapi_conn, _conn_record):
+        logger.debug("Pool checkin — size=%s checked_out=%s", pool.size(), pool.checkedout())
+
+    @event.listens_for(pool, "overflow")
+    def _on_overflow(_dbapi_conn):
+        logger.warning("Pool overflow — size=%s overflow=%s", pool.size(), pool.overflow())
+
+
 def create_engine(settings: Settings) -> AsyncEngine:
     """Create the async database engine."""
-    return create_async_engine(
+    engine = create_async_engine(
         str(settings.database_url),
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
         pool_pre_ping=True,
         echo=settings.debug,
     )
+    _register_pool_events(engine)
+    return engine
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -97,6 +123,14 @@ class InfrastructureContainer:
             session_factory=create_session_factory(engine),
             redis=create_redis(settings),
         )
+
+    async def verify(self) -> None:
+        """Verify DB and Redis connectivity. Call before accepting traffic."""
+        async with self.session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        logger.info("Database connectivity verified")
+        await self.redis.ping()  # type: ignore[misc]  # redis.asyncio typing quirk
+        logger.info("Redis connectivity verified")
 
     async def close(self) -> None:
         """Dispose of all managed resources."""

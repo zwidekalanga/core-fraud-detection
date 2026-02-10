@@ -8,16 +8,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from redis.asyncio import Redis
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.pylitmus_adapter import PylitmusAdapter
 from app.config import Settings
 from app.core.feature_service import FeatureService
-from app.core.fraud_detector import FraudDetector
+from app.core.fraud_detector import EvaluationError, FraudDetector
 from app.models.alert import AlertStatus, Decision, FraudAlert
 from app.repositories.alert_repository import AlertRepository
 from app.repositories.config_repository import ConfigRepository
 from app.repositories.rule_repository import RuleRepository
 from app.repositories.transaction_repository import TransactionRepository
+from app.schemas.alert import SYSTEM_REVIEWER
 from app.schemas.transaction import TransactionEvaluateRequest
 
 logger = logging.getLogger(__name__)
@@ -80,7 +83,15 @@ class FraudEvaluationService:
         alert_repo = AlertRepository(session)
 
         # 1. Upsert transaction
-        txn = await txn_repo.upsert(request)
+        try:
+            txn = await txn_repo.upsert(request)
+        except SQLAlchemyError as exc:
+            logger.error(
+                "Failed to upsert transaction external_id=%s: %s",
+                request.external_id,
+                exc,
+            )
+            raise
 
         # 2. Obtain a fraud detector
         if fraud_detector is None:
@@ -89,7 +100,7 @@ class FraudEvaluationService:
             fraud_detector.load_rules(rules)
 
         # 3. Build evaluation data dict
-        eval_data = _build_eval_data(request)
+        eval_data = PylitmusAdapter.to_eval_data(request)
 
         # 4. (Optional) Enrich with feature service
         if enrich:
@@ -99,25 +110,19 @@ class FraudEvaluationService:
         assessment = fraud_detector.evaluate(eval_data)
         decision = fraud_detector.get_decision(assessment)
 
-        triggered_rules = [
-            {
-                "code": r.rule_code,
-                "name": r.rule_name,
-                "category": r.category,
-                "severity": r.severity.value,
-                "score": r.score,
-                "description": r.explanation,
-            }
-            for r in assessment.triggered_rules
-        ]
+        triggered_rules = PylitmusAdapter.to_triggered_rules(assessment.triggered_rules)
+
+        # Cache decision tier values to avoid repeated computation
+        decision_tier = fraud_detector.get_decision_tier(assessment)
+        decision_tier_desc = fraud_detector.get_decision_tier_description(assessment)
 
         result = EvaluationResult(
             transaction_id=str(txn.id),
             external_id=request.external_id,
             risk_score=assessment.total_score,
             decision=decision.value,
-            decision_tier=fraud_detector.get_decision_tier(assessment),
-            decision_tier_description=fraud_detector.get_decision_tier_description(assessment),
+            decision_tier=decision_tier,
+            decision_tier_description=decision_tier_desc,
             triggered_rules=triggered_rules,
             processing_time_ms=assessment.processing_time_ms,
         )
@@ -129,8 +134,8 @@ class FraudEvaluationService:
                 customer_id=request.customer_id,
                 risk_score=assessment.total_score,
                 decision=decision,
-                decision_tier=fraud_detector.get_decision_tier(assessment),
-                decision_tier_description=fraud_detector.get_decision_tier_description(assessment),
+                decision_tier=decision_tier,
+                decision_tier_description=decision_tier_desc,
                 triggered_rules=triggered_rules,
                 processing_time_ms=assessment.processing_time_ms,
             )
@@ -145,24 +150,6 @@ class FraudEvaluationService:
         await session.commit()
 
         return result
-
-
-def _build_eval_data(request: TransactionEvaluateRequest) -> dict[str, Any]:
-    """Convert a TransactionEvaluateRequest to the dict consumed by FraudDetector."""
-    return {
-        "amount": float(request.amount),
-        "currency": request.currency,
-        "transaction_type": request.transaction_type,
-        "channel": request.channel,
-        "merchant_id": request.merchant_id,
-        "merchant_name": request.merchant_name,
-        "merchant_category": request.merchant_category,
-        "location_country": request.location_country,
-        "location_city": request.location_city,
-        "device_fingerprint": request.device_fingerprint,
-        "ip_address": request.ip_address,
-        "customer_id": request.customer_id,
-    }
 
 
 async def _auto_escalate(
@@ -181,7 +168,7 @@ async def _auto_escalate(
         await alert_repo.review(
             str(alert.id),
             status=AlertStatus.CONFIRMED,
-            reviewed_by="system:auto-escalation",
+            reviewer=SYSTEM_REVIEWER,
         )
     else:
         config_repo = ConfigRepository(session)
@@ -190,5 +177,5 @@ async def _auto_escalate(
             await alert_repo.review(
                 str(alert.id),
                 status=AlertStatus.ESCALATED,
-                reviewed_by="system:auto-escalation",
+                reviewer=SYSTEM_REVIEWER,
             )

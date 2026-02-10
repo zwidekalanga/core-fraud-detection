@@ -12,6 +12,7 @@ class AlertFilter(Filter):
     """Query-param filter for the ``GET /alerts`` endpoint."""
 
     status: Optional[str] = None
+    reference_number: Optional[str] = None
     customer_id: Optional[str] = None
     risk_score__gte: Optional[int] = None
     risk_score__lte: Optional[int] = None

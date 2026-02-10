@@ -4,10 +4,11 @@ import asyncio
 import json
 import logging
 import signal
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.errors import KafkaError
 
 from app.config import Settings
@@ -34,7 +35,6 @@ class BaseConsumer(ABC):
         group_id: str | None = None,
         dlq_topic: str | None = None,
         max_retries: int = 3,
-        max_concurrency: int = 10,
     ):
         self.settings = settings
         self.topic = topic
@@ -46,8 +46,6 @@ class BaseConsumer(ABC):
         self._producer: AIOKafkaProducer | None = None
         self._stop_event = asyncio.Event()
         self._healthy = False
-        # H16: Backpressure — limit concurrent message processing
-        self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def start(self) -> None:
         """Start the consumer."""
@@ -105,17 +103,43 @@ class BaseConsumer(ABC):
         if self._consumer is None:
             raise RuntimeError("Consumer failed to initialise")
 
+        last_lag_log = 0.0
+
         try:
             async for message in self._consumer:
                 if self._stop_event.is_set():
                     break
 
-                # H16: Backpressure — wait for a semaphore slot
-                async with self._semaphore:
-                    await self._process_with_retry(message)
+                await self._process_with_retry(message)
+
+                # Log consumer lag every 60 seconds
+                now = time.monotonic()
+                if now - last_lag_log >= 60:
+                    last_lag_log = now
+                    await self._log_consumer_lag()
 
         finally:
             await self.stop()
+
+    async def _log_consumer_lag(self) -> None:
+        """Log per-partition consumer lag (committed offset vs high watermark)."""
+        if self._consumer is None:
+            return
+        try:
+            partitions = self._consumer.assignment()
+            for tp in partitions:
+                committed = await self._consumer.committed(tp)
+                end_offsets = await self._consumer.end_offsets([tp])
+                high_watermark = end_offsets.get(tp, 0)
+                lag = high_watermark - (committed or 0)
+                logger.info(
+                    "Consumer lag: topic=%s partition=%s lag=%d",
+                    tp.topic,
+                    tp.partition,
+                    lag,
+                )
+        except Exception:
+            logger.debug("Unable to fetch consumer lag", exc_info=True)
 
     async def _process_with_retry(self, message: Any) -> None:
         """Process a message with H15 retry-before-DLQ logic."""

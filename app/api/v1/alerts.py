@@ -13,34 +13,26 @@ If this service is ever exposed to external consumers or multi-tenant
 access, alerts MUST be scoped by organisation / tenant ID.
 """
 
-from math import ceil
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi_filter import FilterDepends
 
 from app.auth.dependencies import CurrentUser, require_role
-from app.dependencies import DBSession
 from app.filters.alert import AlertFilter
-from app.repositories.alert_repository import AlertRepository
+from app.providers import AlertSvc
+from app.rate_limit import limiter
 from app.schemas.alert import (
     AlertListResponse,
     AlertResponse,
     AlertReviewRequest,
     AlertReviewResponse,
     AlertStatsResponse,
-    DailyVolumeEntry,
     DailyVolumeResponse,
-    validate_status_transition,
 )
 from app.utils.audit import audit_logged
 
 router = APIRouter()
-
-
-def _build_alert_response(alert) -> AlertResponse:
-    """Build alert response from an ORM model using ``from_attributes``."""
-    return AlertResponse.model_validate(alert)
 
 
 @router.get(
@@ -50,31 +42,24 @@ def _build_alert_response(alert) -> AlertResponse:
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def list_alerts(
-    db: DBSession,
+    service: AlertSvc,
     filters: AlertFilter = FilterDepends(AlertFilter),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
+    account_number: str | None = Query(None, description="Filter by account number"),
 ) -> AlertListResponse:
     """
     List fraud alerts with optional filtering and sorting.
 
     - **status**: Filter by review status (pending, confirmed, dismissed, escalated)
     - **customer_id**: Filter by customer
+    - **account_number**: Filter by account number (on the related transaction)
     - **risk_score__gte / risk_score__lte**: Filter by risk score range
     - **decision**: Filter by detection decision (approve, review, flag)
     - **created_at__gte / created_at__lte**: Filter by creation date range
     - **order_by**: Sort fields (e.g. ``-created_at``, ``risk_score``)
     """
-    repo = AlertRepository(db)
-    alerts, total = await repo.get_all(filters, page=page, size=size)
-
-    return AlertListResponse(
-        items=[_build_alert_response(a) for a in alerts],
-        total=total,
-        page=page,
-        size=size,
-        pages=ceil(total / size) if size > 0 else 0,
-    )
+    return await service.list_alerts(filters, page=page, size=size, account_number=account_number)
 
 
 @router.get(
@@ -82,12 +67,10 @@ async def list_alerts(
     response_model=AlertStatsResponse,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
-async def get_alert_stats(db: DBSession, response: Response) -> AlertStatsResponse:
+async def get_alert_stats(service: AlertSvc, response: Response) -> AlertStatsResponse:
     """Get alert statistics summary."""
     response.headers["Cache-Control"] = "private, max-age=30"
-    repo = AlertRepository(db)
-    stats = await repo.get_stats()
-    return AlertStatsResponse(**stats)
+    return await service.get_stats()
 
 
 @router.get(
@@ -96,18 +79,13 @@ async def get_alert_stats(db: DBSession, response: Response) -> AlertStatsRespon
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def get_daily_volume(
-    db: DBSession,
+    service: AlertSvc,
     response: Response,
     days: int = Query(7, ge=1, le=90),
 ) -> DailyVolumeResponse:
     """Get alert counts per day for the last N days."""
     response.headers["Cache-Control"] = "private, max-age=30"
-    repo = AlertRepository(db)
-    rows = await repo.get_daily_volume(days=days)
-    return DailyVolumeResponse(
-        items=[DailyVolumeEntry(**row) for row in rows],
-        days=days,
-    )
+    return await service.get_daily_volume(days=days)
 
 
 @router.get(
@@ -118,19 +96,16 @@ async def get_daily_volume(
 )
 async def get_alert(
     alert_id: UUID,
-    db: DBSession,
+    service: AlertSvc,
 ) -> AlertResponse:
     """Get detailed information about a specific alert."""
-    repo = AlertRepository(db)
-    alert = await repo.get_by_id(str(alert_id))
-
-    if not alert:
+    result = await service.get_alert(str(alert_id))
+    if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alert with ID '{alert_id}' not found",
         )
-
-    return _build_alert_response(alert)
+    return result
 
 
 @router.post(
@@ -138,11 +113,13 @@ async def get_alert(
     response_model=AlertReviewResponse,
     dependencies=[Depends(audit_logged("review_alert"))],
 )
+@limiter.limit("30/minute")
 async def review_alert(
+    request: Request,
     alert_id: UUID,
     review_data: AlertReviewRequest,
     current_user: CurrentUser,
-    db: DBSession,
+    service: AlertSvc,
     _: None = Depends(require_role("admin", "analyst")),
 ) -> AlertReviewResponse:
     """
@@ -153,46 +130,16 @@ async def review_alert(
     - **dismissed**: False positive
     - **escalated**: Needs further investigation
     """
-    repo = AlertRepository(db)
-    alert_id_str = str(alert_id)
-
-    # Get current alert to verify it exists
-    existing = await repo.get_by_id(alert_id_str)
-    if not existing:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Alert with ID '{alert_id_str}' not found",
-        )
-
-    # M36: Validate status transition
     try:
-        validate_status_transition(existing.status, review_data.status.value)
+        result = await service.review_alert(str(alert_id), review_data, current_user)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
         )
-
-    # M46: Use immutable user ID instead of mutable username
-    reviewed_by = current_user.id
-
-    alert = await repo.review(
-        alert_id_str,
-        status=review_data.status,
-        reviewed_by=reviewed_by,
-        notes=review_data.notes,
-    )
-
-    if not alert:
+    if result is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update alert",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alert with ID '{alert_id}' not found",
         )
-
-    return AlertReviewResponse(
-        id=alert.id,
-        status=alert.status,
-        reviewed_by=alert.reviewed_by,  # type: ignore
-        reviewed_at=alert.reviewed_at,  # type: ignore
-        review_notes=alert.review_notes,
-    )
+    return result

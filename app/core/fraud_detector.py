@@ -12,9 +12,8 @@ from typing import Any
 
 from pylitmus import DecisionTier, create_engine
 from pylitmus.types import AssessmentResult
-from pylitmus.types import Rule as PylitmusRule
-from pylitmus.types import Severity as PylitmusSeverity
 
+from app.adapters.pylitmus_adapter import PylitmusAdapter
 from app.config import Settings
 from app.models.alert import Decision
 from app.models.rule import FraudRule
@@ -44,10 +43,10 @@ class FraudDetector:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._rules: list[PylitmusRule] = []
+        self._rules: list[Any] = []
         self._engine = self._create_engine([])
 
-    def _create_engine(self, rules: list[PylitmusRule]):
+    def _create_engine(self, rules: list[Any]):
         """Create pylitmus engine with decision tiers and RETE algorithm."""
         return create_engine(
             rules=rules,
@@ -56,34 +55,12 @@ class FraudDetector:
         )
 
     def load_rules(self, rules: list[FraudRule]) -> None:
-        """Load rules from database into pylitmus engine."""
-        self._rules = [self._convert_to_pylitmus_rule(rule) for rule in rules if rule.enabled]
+        """Load rules from database into pylitmus engine.
+
+        Uses ``PylitmusAdapter`` to convert ORM models to pylitmus types.
+        """
+        self._rules = [PylitmusAdapter.to_pylitmus_rule(rule) for rule in rules if rule.enabled]
         self._engine = self._create_engine(self._rules)
-
-    def _convert_to_pylitmus_rule(self, rule: FraudRule) -> PylitmusRule:
-        """Convert database rule to pylitmus Rule type."""
-        # Map severity string to pylitmus Severity enum
-        severity_map = {
-            "low": PylitmusSeverity.LOW,
-            "medium": PylitmusSeverity.MEDIUM,
-            "high": PylitmusSeverity.HIGH,
-            "critical": PylitmusSeverity.CRITICAL,
-        }
-
-        return PylitmusRule(
-            code=rule.code,
-            name=rule.name,
-            description=rule.description or "",
-            category=rule.category,
-            severity=severity_map.get(rule.severity, PylitmusSeverity.MEDIUM),
-            score=rule.score,
-            enabled=rule.enabled,
-            conditions=rule.conditions,
-            version=1,
-            effective_from=rule.effective_from,
-            effective_to=rule.effective_to,
-            metadata={},
-        )
 
     def evaluate(self, data: dict[str, Any]) -> AssessmentResult:
         """
@@ -109,7 +86,7 @@ class FraudDetector:
 
     def get_decision(self, assessment: AssessmentResult) -> Decision:
         """Convert pylitmus decision tier to our Decision enum."""
-        return Decision((assessment.decision or "approve").lower())
+        return PylitmusAdapter.to_decision(assessment.decision)
 
     def get_decision_tier(self, assessment: AssessmentResult) -> str:
         """Get the raw decision tier name from assessment."""

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,10 @@ class FeatureService:
             logger.debug("No cached features for customer: %s", customer_id)
             return CustomerFeatures(customer_id=customer_id)
 
-        except Exception as e:
+        except json.JSONDecodeError:
+            logger.error("Corrupt cached features for customer=%s", customer_id)
+            return CustomerFeatures(customer_id=customer_id)
+        except RedisError as e:
             logger.warning(
                 "Redis unavailable for customer features (customer=%s): %s", customer_id, e
             )
@@ -86,7 +90,10 @@ class FeatureService:
 
             return 0
 
-        except Exception as e:
+        except json.JSONDecodeError:
+            logger.error("Corrupt cached merchant risk for merchant=%s", merchant_id)
+            return 0
+        except RedisError as e:
             logger.warning("Redis unavailable for merchant risk (merchant=%s): %s", merchant_id, e)
             return 0
 

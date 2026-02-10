@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.constants import RULE_CODE_PATTERN
 from app.models.rule import RuleCategory, Severity
 
 
@@ -46,10 +47,16 @@ class RuleCondition(BaseModel):
         return v
 
 
+def _check_effective_dates(effective_from: datetime | None, effective_to: datetime | None) -> None:
+    """Validate effective_to is after effective_from when both are set."""
+    if effective_from and effective_to and effective_to <= effective_from:
+        raise ValueError("effective_to must be after effective_from")
+
+
 class RuleCreate(BaseModel):
     """Schema for creating a new rule."""
 
-    code: str = Field(..., min_length=1, max_length=50, pattern=r"^[A-Z]{2,4}_\d{3}$")
+    code: str = Field(..., min_length=1, max_length=50, pattern=RULE_CODE_PATTERN)
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
     category: RuleCategory
@@ -63,9 +70,7 @@ class RuleCreate(BaseModel):
     @model_validator(mode="after")
     def validate_effective_dates(self) -> "RuleCreate":
         """Ensure effective_to is after effective_from when both are set."""
-        if self.effective_from and self.effective_to:
-            if self.effective_to <= self.effective_from:
-                raise ValueError("effective_to must be after effective_from")
+        _check_effective_dates(self.effective_from, self.effective_to)
         return self
 
 
@@ -85,9 +90,7 @@ class RuleUpdate(BaseModel):
     @model_validator(mode="after")
     def validate_effective_dates(self) -> "RuleUpdate":
         """Ensure effective_to is after effective_from when both are set."""
-        if self.effective_from and self.effective_to:
-            if self.effective_to <= self.effective_from:
-                raise ValueError("effective_to must be after effective_from")
+        _check_effective_dates(self.effective_from, self.effective_to)
         return self
 
 

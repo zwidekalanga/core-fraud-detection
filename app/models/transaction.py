@@ -36,6 +36,9 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
     # Customer reference
     customer_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
 
+    # Account reference (from core-banking, nullable for backward compat / gRPC path)
+    account_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
+
     # Transaction details
     amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
@@ -50,6 +53,9 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
     # Location info
     location_country: Mapped[str | None] = mapped_column(String(3), nullable=True)
     location_city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Account number (Capitec 10-digit format, denormalized from core-banking)
+    account_number: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
 
     # Device info
     device_fingerprint: Mapped[str | None] = mapped_column(String(255), nullable=True)

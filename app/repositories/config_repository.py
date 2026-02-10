@@ -1,9 +1,13 @@
 """Repository for system configuration data access."""
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import CONFIG_DEFAULTS, SystemConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigRepository:
@@ -28,6 +32,12 @@ class ConfigRepository:
         try:
             return int(value)
         except (ValueError, TypeError):
+            logger.warning(
+                "Config key '%s' has non-integer value '%s', falling back to default=%d",
+                key,
+                value,
+                default,
+            )
             return default
 
     async def get_all(self) -> dict[str, str]:

@@ -7,28 +7,88 @@ on:
     branches: [main, development]
 
 jobs:
-  tests:
+  quality:
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          architecture: x64
+          python-version: "3.12"
 
       - uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
         run: uv sync
 
-      - name: Run quality checks and tests
-        run: |
-          make quality
-          make test
+      - name: Run quality checks
+        run: make quality
+
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run unit tests
+        run: make test.unit
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [quality]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: core_fraud_detection
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run integration tests
+        run: make test.integration
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/core_fraud_detection
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET_KEY: ci-test-secret-do-not-use-in-prod
 
       - name: Upload coverage artifacts
         if: always()
@@ -41,7 +101,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [tests]
+    needs: [test-unit, test-integration]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     timeout-minutes: 30
     env:

@@ -16,9 +16,6 @@ def _make_mock_settings():
     settings.kafka_bootstrap_servers = "localhost:9092"
     settings.kafka_consumer_group = "test-group"
     settings.kafka_auto_offset_reset = "earliest"
-    settings.threshold_approve = 30
-    settings.threshold_review = 70
-    settings.scoring_strategy = "weighted"
     settings.jwt_secret_key = "test-secret"
     settings.jwt_algorithm = "HS256"
     settings.jwt_access_token_expire_minutes = 30

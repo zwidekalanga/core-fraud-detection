@@ -3,13 +3,16 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import cast, func, select
+from sqlalchemy import cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.types import Date
 
+from app.core.alert_state import AlertStateMachine
 from app.filters.alert import AlertFilter
 from app.models.alert import AlertStatus, Decision, FraudAlert
+from app.models.transaction import Transaction
+from app.schemas.alert import ReviewerInfo
 
 
 class AlertRepository:
@@ -23,10 +26,19 @@ class AlertRepository:
         filters: AlertFilter,
         page: int = 1,
         size: int = 50,
+        account_number: str | None = None,
     ) -> tuple[list[FraudAlert], int]:
         """Get alerts with declarative filtering, sorting, and pagination."""
         query = filters.filter(select(FraudAlert).options(selectinload(FraudAlert.transaction)))
         count_query = filters.filter(select(func.count()).select_from(FraudAlert))
+
+        if account_number:
+            query = query.join(Transaction, FraudAlert.transaction_id == Transaction.id).where(
+                Transaction.account_number == account_number
+            )
+            count_query = count_query.join(
+                Transaction, FraudAlert.transaction_id == Transaction.id
+            ).where(Transaction.account_number == account_number)
 
         total = await self.session.scalar(count_query) or 0
 
@@ -46,6 +58,21 @@ class AlertRepository:
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def _next_reference_number(self) -> str:
+        """Generate the next human-readable alert reference number.
+
+        Uses a PostgreSQL sequence for atomic, gap-free incrementing.
+        Falls back to a count-based approach if the sequence doesn't exist yet.
+        """
+        try:
+            result = await self.session.execute(text("SELECT nextval('alert_ref_seq')"))
+            seq_val = result.scalar()
+        except Exception:
+            # Fallback if sequence not yet created (pre-migration)
+            result = await self.session.execute(select(func.count()).select_from(FraudAlert))
+            seq_val = (result.scalar() or 0) + 1
+        return f"FRD-{seq_val:05d}"
+
     async def create(
         self,
         *,
@@ -59,8 +86,11 @@ class AlertRepository:
         processing_time_ms: float | None = None,
     ) -> FraudAlert:
         """Create a new fraud alert."""
+        reference_number = await self._next_reference_number()
+
         alert = FraudAlert(
             transaction_id=transaction_id,
+            reference_number=reference_number,
             customer_id=customer_id,
             risk_score=risk_score,
             decision=decision,
@@ -80,21 +110,35 @@ class AlertRepository:
         alert_id: str,
         *,
         status: AlertStatus,
-        reviewed_by: str,
+        reviewer: ReviewerInfo,
         notes: str | None = None,
     ) -> FraudAlert | None:
-        """Review and update an alert's status."""
+        """Review and update an alert's status.
+
+        Raises:
+            ValueError: If the status transition is not allowed.
+        """
         alert = await self.get_by_id(alert_id)
         if not alert:
             return None
 
+        # Validate state transition via State pattern
+        current_state = AlertStateMachine.get_state(alert.status)
+        current_state.validate_transition(alert_id, status)
+
         alert.status = status
-        alert.reviewed_by = reviewed_by
+        alert.reviewed_by = reviewer.id
+        alert.reviewed_by_username = reviewer.username
         alert.reviewed_at = datetime.now(UTC)
         alert.review_notes = notes
 
         await self.session.flush()
         await self.session.refresh(alert)
+
+        # Fire state-entry side-effects (logging, notifications)
+        new_state = AlertStateMachine.get_state(status)
+        new_state.on_enter(alert)
+
         return alert
 
     async def get_pending_count(self) -> int:

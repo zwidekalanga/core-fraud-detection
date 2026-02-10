@@ -8,10 +8,23 @@ from pydantic import BaseModel, Field, field_validator
 from app.models.alert import AlertStatus
 
 
+class ReviewerInfo(BaseModel):
+    """Value object representing who reviewed an alert."""
+
+    id: str
+    username: str
+
+    model_config = {"frozen": True}
+
+
+SYSTEM_REVIEWER = ReviewerInfo(id="system:auto-escalation", username="System")
+
+
 class AlertTransactionInfo(BaseModel):
     """Embedded transaction info in alert response."""
 
     external_id: str
+    account_number: str | None = None
     amount: Decimal
     currency: str
     transaction_type: str
@@ -38,6 +51,7 @@ class AlertResponse(BaseModel):
     """Schema for alert response."""
 
     id: str
+    reference_number: str | None = None
     transaction_id: str
     customer_id: str
     risk_score: int
@@ -48,6 +62,7 @@ class AlertResponse(BaseModel):
     triggered_rules: list[TriggeredRuleDetail]
     processing_time_ms: float | None
     reviewed_by: str | None
+    reviewed_by_username: str | None = None
     reviewed_at: datetime | None
     review_notes: str | None
     created_at: datetime
@@ -88,31 +103,14 @@ class AlertReviewRequest(BaseModel):
         return v
 
 
-# Valid alert status transitions (State pattern - M36)
-VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"confirmed", "dismissed", "escalated"},
-    "escalated": {"confirmed", "dismissed"},
-    "confirmed": set(),
-    "dismissed": set(),
-}
-
-
-def validate_status_transition(current: str, target: str) -> None:
-    """Validate that a status transition is allowed."""
-    allowed = VALID_STATUS_TRANSITIONS.get(current, set())
-    if target not in allowed:
-        raise ValueError(
-            f"Cannot transition from '{current}' to '{target}'. "
-            f"Allowed transitions: {allowed or 'none (terminal state)'}"
-        )
-
-
 class AlertReviewResponse(BaseModel):
     """Schema for alert review response."""
 
     id: str
+    reference_number: str | None = None
     status: str
     reviewed_by: str
+    reviewed_by_username: str | None = None
     reviewed_at: datetime
     review_notes: str | None
 

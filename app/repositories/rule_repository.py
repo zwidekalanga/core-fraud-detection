@@ -35,7 +35,10 @@ class RuleRepository:
         query = filters.filter(select(FraudRule))
         count_query = filters.filter(select(func.count()).select_from(FraudRule))
 
-        # Temporal bounds: when enabled=True, also enforce effective_from/to
+        # Temporal bounds: when enabled=True, also enforce effective_from/to.
+        # fastapi-filter handles the boolean `enabled` column, but temporal
+        # validity (effective_from/to vs now) is business logic that must be
+        # applied manually — and to BOTH queries so pagination stays consistent.
         if filters.enabled is True:
             now = datetime.now(UTC)
             temporal = [
@@ -44,6 +47,7 @@ class RuleRepository:
             ]
             for cond in temporal:
                 query = query.where(cond)
+                count_query = count_query.where(cond)
 
         total = await self.session.scalar(count_query) or 0
 

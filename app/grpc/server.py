@@ -7,6 +7,9 @@ from decimal import Decimal
 
 import grpc
 from grpc import aio as grpc_aio
+from grpc_health.v1 import health as grpc_health
+from grpc_health.v1 import health_pb2 as health_pb2
+from grpc_health.v1 import health_pb2_grpc as health_pb2_grpc
 
 from app.config import get_settings
 from app.core.evaluation_service import FraudEvaluationService
@@ -35,10 +38,15 @@ class FraudEvaluationServicer(fraud_evaluation_pb2_grpc.FraudEvaluationServiceSe
         async with self._session_factory() as db:
             try:
                 # Build the internal evaluation request from gRPC message
+                try:
+                    amount = Decimal(str(request.amount))
+                except Exception as exc:
+                    raise ValueError(f"Invalid amount '{request.amount}': {exc}") from exc
+
                 eval_request = TransactionEvaluateRequest(
                     external_id=request.external_id,
                     customer_id=request.customer_id,
-                    amount=Decimal(str(request.amount)),
+                    amount=amount,
                     currency=request.currency or "ZAR",
                     transaction_type=request.transaction_type,
                     channel=request.channel,
@@ -104,6 +112,7 @@ async def serve(port: int = 50051):
     """Start the async gRPC server."""
     settings = get_settings()
     infra = InfrastructureContainer.from_settings(settings)
+    await infra.verify()
 
     init_telemetry("core-fraud-detection.grpc")
 
@@ -117,6 +126,17 @@ async def serve(port: int = 50051):
     fraud_evaluation_pb2_grpc.add_FraudEvaluationServiceServicer_to_server(
         FraudEvaluationServicer(infra=infra), server
     )
+
+    # Register gRPC health checking service (grpc.health.v1.Health)
+    health_servicer = grpc_health.HealthServicer()
+    health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
+    # Mark the evaluation service and the overall server as SERVING
+    health_servicer.set(
+        "sentinel.fraud.v1.FraudEvaluationService",
+        health_pb2.HealthCheckResponse.SERVING,
+    )
+    health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
+
     listen_addr = f"0.0.0.0:{port}"
     server.add_insecure_port(listen_addr)
     logger.info("gRPC FraudEvaluationService listening on %s", listen_addr)
@@ -124,6 +144,8 @@ async def serve(port: int = 50051):
     try:
         await server.wait_for_termination()
     finally:
+        # Mark as NOT_SERVING before tearing down infrastructure
+        health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
         await infra.close()
         logger.info("gRPC server shut down — infrastructure closed.")
 
