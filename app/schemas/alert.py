@@ -74,16 +74,6 @@ class AlertResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class AlertListResponse(BaseModel):
-    """Schema for paginated alert list."""
-
-    items: list[AlertResponse]
-    total: int
-    page: int
-    size: int
-    pages: int
-
-
 class AlertReviewRequest(BaseModel):
     """Schema for reviewing an alert."""
 

@@ -6,9 +6,10 @@ with service-layer dependencies overridden so that no live Postgres is required.
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi_pagination import Page
 
 from app.main import app
 from app.providers import get_alert_service, get_config_service, get_rule_service
@@ -26,6 +27,14 @@ _NOW = datetime.now(UTC)
 # ---------------------------------------------------------------------------
 # Helpers — build mock services backed by AsyncMock repos
 # ---------------------------------------------------------------------------
+
+
+def _make_page(items, total=None, page=1, size=50):
+    """Build a Page object matching fastapi-pagination's output."""
+    if total is None:
+        total = len(items)
+    pages = (total + size - 1) // size if size > 0 else 0
+    return Page(items=items, total=total, page=page, size=size, pages=pages)
 
 
 def _mock_rule_service() -> RuleService:
@@ -84,10 +93,11 @@ class TestHealthEndpoints:
 class TestRulesAPI:
     """Test fraud rule management endpoints (service layer mocked via DI overrides)."""
 
-    async def test_list_rules(self, admin_client):
+    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_list_rules(self, mock_paginate, admin_client):
         rules = [_make_rule_model(code="AMT_001"), _make_rule_model(code="VEL_002")]
+        mock_paginate.return_value = _make_page(rules, total=2)
         svc = _mock_rule_service()
-        svc._repo.get_all = AsyncMock(return_value=(rules, 2))
         app.dependency_overrides[get_rule_service] = lambda: svc
         try:
             resp = await admin_client.get("/api/v1/rules")
@@ -99,10 +109,11 @@ class TestRulesAPI:
         assert body["total"] == 2
         assert "page" in body
 
-    async def test_list_rules_with_filter(self, admin_client):
+    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_list_rules_with_filter(self, mock_paginate, admin_client):
         rule = _make_rule_model(enabled=True)
+        mock_paginate.return_value = _make_page([rule], total=1)
         svc = _mock_rule_service()
-        svc._repo.get_all = AsyncMock(return_value=([rule], 1))
         app.dependency_overrides[get_rule_service] = lambda: svc
         try:
             resp = await admin_client.get("/api/v1/rules", params={"enabled": True})
@@ -224,10 +235,11 @@ class TestRulesAPI:
 class TestAlertsAPI:
     """Test fraud alert endpoints (service layer mocked via DI overrides)."""
 
-    async def test_list_alerts(self, admin_client):
+    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_list_alerts(self, mock_paginate, admin_client):
         alerts = [_make_alert_model(), _make_alert_model()]
+        mock_paginate.return_value = _make_page(alerts, total=2)
         svc = _mock_alert_service()
-        svc._repo.get_all = AsyncMock(return_value=(alerts, 2))
         app.dependency_overrides[get_alert_service] = lambda: svc
         try:
             resp = await admin_client.get("/api/v1/alerts")
@@ -238,9 +250,10 @@ class TestAlertsAPI:
         assert "items" in body
         assert body["total"] == 2
 
-    async def test_list_alerts_pagination(self, admin_client):
+    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_list_alerts_pagination(self, mock_paginate, admin_client):
+        mock_paginate.return_value = _make_page([], total=0, page=1, size=5)
         svc = _mock_alert_service()
-        svc._repo.get_all = AsyncMock(return_value=([], 0))
         app.dependency_overrides[get_alert_service] = lambda: svc
         try:
             resp = await admin_client.get("/api/v1/alerts", params={"page": 1, "size": 5})
@@ -251,9 +264,10 @@ class TestAlertsAPI:
         assert body["page"] == 1
         assert body["size"] == 5
 
-    async def test_list_alerts_filter_by_status(self, admin_client):
+    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_list_alerts_filter_by_status(self, mock_paginate, admin_client):
+        mock_paginate.return_value = _make_page([], total=0)
         svc = _mock_alert_service()
-        svc._repo.get_all = AsyncMock(return_value=([], 0))
         app.dependency_overrides[get_alert_service] = lambda: svc
         try:
             resp = await admin_client.get("/api/v1/alerts", params={"status": "pending"})

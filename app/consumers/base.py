@@ -8,7 +8,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
 from app.config import Settings

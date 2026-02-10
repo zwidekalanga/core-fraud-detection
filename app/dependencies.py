@@ -39,10 +39,6 @@ def _register_pool_events(engine: AsyncEngine) -> None:
     def _on_checkin(_dbapi_conn, _conn_record):
         logger.debug("Pool checkin — size=%s checked_out=%s", pool.size(), pool.checkedout())
 
-    @event.listens_for(pool, "overflow")
-    def _on_overflow(_dbapi_conn):
-        logger.warning("Pool overflow — size=%s overflow=%s", pool.size(), pool.overflow())
-
 
 def create_engine(settings: Settings) -> AsyncEngine:
     """Create the async database engine."""

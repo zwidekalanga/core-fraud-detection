@@ -55,6 +55,9 @@ dependencies = [
     # Declarative query filtering
     "fastapi-filter[sqlalchemy]>=2.0.0",
 
+    # Pagination
+    "fastapi-pagination[sqlalchemy]>=0.12.0",
+
     # Rate Limiting
     "slowapi>=0.1.9",
 

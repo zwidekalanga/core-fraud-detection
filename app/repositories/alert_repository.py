@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import cast, func, select, text
+from sqlalchemy import Select, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.types import Date
@@ -11,7 +11,6 @@ from sqlalchemy.types import Date
 from app.core.alert_state import AlertStateMachine
 from app.filters.alert import AlertFilter
 from app.models.alert import AlertStatus, Decision, FraudAlert
-from app.models.transaction import Transaction
 from app.schemas.alert import ReviewerInfo
 
 
@@ -21,32 +20,16 @@ class AlertRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_all(
+    def get_list_query(
         self,
         filters: AlertFilter,
-        page: int = 1,
-        size: int = 50,
         account_number: str | None = None,
-    ) -> tuple[list[FraudAlert], int]:
-        """Get alerts with declarative filtering, sorting, and pagination."""
+    ) -> Select:
+        """Return a filtered + sorted query — pagination handled by the library."""
         query = filters.filter(select(FraudAlert).options(selectinload(FraudAlert.transaction)))
-        count_query = filters.filter(select(func.count()).select_from(FraudAlert))
-
-        if account_number:
-            query = query.join(Transaction, FraudAlert.transaction_id == Transaction.id).where(
-                Transaction.account_number == account_number
-            )
-            count_query = count_query.join(
-                Transaction, FraudAlert.transaction_id == Transaction.id
-            ).where(Transaction.account_number == account_number)
-
-        total = await self.session.scalar(count_query) or 0
-
+        query = AlertFilter.apply_account_number(query, account_number)
         query = filters.sort(query)
-        query = query.offset((page - 1) * size).limit(size)
-
-        result = await self.session.execute(query)
-        return list(result.scalars().all()), total
+        return query
 
     async def get_by_id(self, alert_id: str) -> FraudAlert | None:
         """Get an alert by ID with transaction details."""

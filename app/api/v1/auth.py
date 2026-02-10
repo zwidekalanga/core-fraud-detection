@@ -16,6 +16,6 @@ router = APIRouter()
 
 @router.get("/me", response_model=UserResponse)
 @limiter.limit("30/minute")
-async def get_current_user_info(request: Request, current_user: CurrentUser) -> UserResponse:
+async def get_current_user_info(request: Request, current_user: CurrentUser) -> UserResponse:  # noqa: ARG001
     """Return the authenticated user's profile from JWT claims."""
     return UserResponse.model_validate(current_user)

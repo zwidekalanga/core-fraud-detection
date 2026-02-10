@@ -6,7 +6,7 @@ These tests verify the /me endpoint, token validation, and RBAC enforcement.
 """
 
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,6 +14,7 @@ from app.main import app
 from app.providers import get_alert_service, get_rule_service
 from app.services.alert_service import AlertService
 from app.services.rule_service import RuleService
+from fastapi_pagination import Page
 from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
 from tests.helpers.token_factory import create_refresh_token
 
@@ -99,11 +100,12 @@ class TestMeEndpoint:
 class TestRBACEnforcement:
     """Tests that endpoints enforce correct role-based permissions."""
 
-    async def test_viewer_can_list_alerts(self, client):
+    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_viewer_can_list_alerts(self, mock_paginate, client):
         """Viewers should be able to read alerts."""
+        mock_paginate.return_value = Page(items=[], total=0, page=1, size=50, pages=0)
         headers = _make_headers("viewer", "viewer")
         svc = _mock_alert_service()
-        svc._repo.get_all = AsyncMock(return_value=([], 0))
         app.dependency_overrides[get_alert_service] = lambda: svc
         try:
             resp = await client.get("/api/v1/alerts", headers=headers)
@@ -111,11 +113,12 @@ class TestRBACEnforcement:
             app.dependency_overrides.pop(get_alert_service, None)
         assert resp.status_code == 200
 
-    async def test_viewer_can_list_rules(self, client):
+    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    async def test_viewer_can_list_rules(self, mock_paginate, client):
         """Viewers should be able to read rules."""
+        mock_paginate.return_value = Page(items=[], total=0, page=1, size=50, pages=0)
         headers = _make_headers("viewer", "viewer")
         svc = _mock_rule_service()
-        svc._repo.get_all = AsyncMock(return_value=([], 0))
         app.dependency_overrides[get_rule_service] = lambda: svc
         try:
             resp = await client.get("/api/v1/rules", headers=headers)

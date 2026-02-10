@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,39 +25,13 @@ class RuleRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_all(
-        self,
-        filters: RuleFilter,
-        page: int = 1,
-        size: int = 50,
-    ) -> tuple[list[FraudRule], int]:
-        """Get all rules with declarative filtering and pagination."""
+    def get_list_query(self, filters: RuleFilter) -> Select:
+        """Return a filtered + sorted query — pagination handled by the library."""
         query = filters.filter(select(FraudRule))
-        count_query = filters.filter(select(func.count()).select_from(FraudRule))
-
-        # Temporal bounds: when enabled=True, also enforce effective_from/to.
-        # fastapi-filter handles the boolean `enabled` column, but temporal
-        # validity (effective_from/to vs now) is business logic that must be
-        # applied manually — and to BOTH queries so pagination stays consistent.
-        if filters.enabled is True:
-            now = datetime.now(UTC)
-            temporal = [
-                (FraudRule.effective_from.is_(None)) | (FraudRule.effective_from <= now),
-                (FraudRule.effective_to.is_(None)) | (FraudRule.effective_to >= now),
-            ]
-            for cond in temporal:
-                query = query.where(cond)
-                count_query = count_query.where(cond)
-
-        total = await self.session.scalar(count_query) or 0
-
+        query = filters.apply_temporal_bounds(query)
         query = filters.sort(query)
-        if not filters.order_by:
-            query = query.order_by(FraudRule.category, FraudRule.code)
-        query = query.offset((page - 1) * size).limit(size)
-
-        result = await self.session.execute(query)
-        return list(result.scalars().all()), total
+        query = filters.apply_default_ordering(query)
+        return query
 
     async def get_by_code(self, code: str) -> FraudRule | None:
         """Get a rule by its code."""
@@ -97,9 +71,9 @@ class RuleRepository:
         self.session.add(rule)
         try:
             await self.session.flush()
-        except IntegrityError:
+        except IntegrityError as e:
             await self.session.rollback()
-            raise DuplicateRuleError(rule_data.code)
+            raise DuplicateRuleError(rule_data.code) from e
         await self.session.refresh(rule)
         return rule
 

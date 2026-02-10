@@ -17,13 +17,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi_filter import FilterDepends
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.filters.alert import AlertFilter
 from app.providers import AlertSvc
 from app.rate_limit import limiter
 from app.schemas.alert import (
-    AlertListResponse,
     AlertResponse,
     AlertReviewRequest,
     AlertReviewResponse,
@@ -37,17 +38,15 @@ router = APIRouter()
 
 @router.get(
     "",
-    response_model=AlertListResponse,
+    response_model=Page[AlertResponse],
     response_model_exclude_none=True,
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def list_alerts(
     service: AlertSvc,
     filters: AlertFilter = FilterDepends(AlertFilter),
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
     account_number: str | None = Query(None, description="Filter by account number"),
-) -> AlertListResponse:
+):
     """
     List fraud alerts with optional filtering and sorting.
 
@@ -59,7 +58,8 @@ async def list_alerts(
     - **created_at__gte / created_at__lte**: Filter by creation date range
     - **order_by**: Sort fields (e.g. ``-created_at``, ``risk_score``)
     """
-    return await service.list_alerts(filters, page=page, size=size, account_number=account_number)
+    query = service.get_list_query(filters, account_number=account_number)
+    return await sqlalchemy_paginate(service.session, query)
 
 
 @router.get(
@@ -115,7 +115,7 @@ async def get_alert(
 )
 @limiter.limit("30/minute")
 async def review_alert(
-    request: Request,
+    request: Request,  # noqa: ARG001  (required by slowapi limiter)
     alert_id: UUID,
     review_data: AlertReviewRequest,
     current_user: CurrentUser,
@@ -136,7 +136,7 @@ async def review_alert(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
-        )
+        ) from e
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

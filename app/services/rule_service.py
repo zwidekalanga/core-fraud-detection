@@ -1,12 +1,11 @@
 """Service layer for fraud rule management."""
 
-from math import ceil
+from sqlalchemy import Select
 
 from app.filters.rule import RuleFilter
-from app.repositories.rule_repository import DuplicateRuleError, RuleRepository
+from app.repositories.rule_repository import RuleRepository
 from app.schemas.rule import (
     RuleCreate,
-    RuleListResponse,
     RuleResponse,
     RuleUpdate,
 )
@@ -18,20 +17,14 @@ class RuleService:
     def __init__(self, repo: RuleRepository):
         self._repo = repo
 
-    async def list_rules(
-        self,
-        filters: RuleFilter,
-        page: int = 1,
-        size: int = 50,
-    ) -> RuleListResponse:
-        rules, total = await self._repo.get_all(filters, page=page, size=size)
-        return RuleListResponse(
-            items=[RuleResponse.model_validate(r) for r in rules],
-            total=total,
-            page=page,
-            size=size,
-            pages=ceil(total / size) if size > 0 else 0,
-        )
+    @property
+    def session(self):
+        """Expose the repo's session for sqlalchemy_paginate."""
+        return self._repo.session
+
+    def get_list_query(self, filters: RuleFilter) -> Select:
+        """Return a filtered query — pagination handled by the library."""
+        return self._repo.get_list_query(filters)
 
     async def get_rule(self, code: str) -> RuleResponse | None:
         rule = await self._repo.get_by_code(code)

@@ -1,7 +1,9 @@
 """Rules API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from fastapi_filter import FilterDepends
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 
 from app.auth.dependencies import require_role
 from app.constants import RULE_CODE_PATTERN
@@ -10,7 +12,6 @@ from app.providers import RuleSvc
 from app.repositories.rule_repository import DuplicateRuleError
 from app.schemas.rule import (
     RuleCreate,
-    RuleListResponse,
     RuleResponse,
     RuleUpdate,
 )
@@ -24,15 +25,13 @@ _RULE_CODE = Path(pattern=RULE_CODE_PATTERN, description="Rule code (e.g. AMT_00
 
 @router.get(
     "",
-    response_model=RuleListResponse,
+    response_model=Page[RuleResponse],
     dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
 )
 async def list_rules(
     service: RuleSvc,
     filters: RuleFilter = FilterDepends(RuleFilter),
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
-) -> RuleListResponse:
+):
     """
     List all fraud rules with optional filtering.
 
@@ -40,7 +39,8 @@ async def list_rules(
     - **category**: Filter by rule category
     - **order_by**: Sort fields (e.g. ``category``, ``-code``)
     """
-    return await service.list_rules(filters, page=page, size=size)
+    query = service.get_list_query(filters)
+    return await sqlalchemy_paginate(service.session, query)
 
 
 @router.get(
@@ -75,11 +75,11 @@ async def create_rule(
     """Create a new fraud rule."""
     try:
         return await service.create_rule(rule_data)
-    except DuplicateRuleError:
+    except DuplicateRuleError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Rule with code '{rule_data.code}' already exists",
-        )
+        ) from e
 
 
 @router.put(

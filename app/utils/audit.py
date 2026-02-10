@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import Depends, Request
+from fastapi import Request
 
 from app.auth.dependencies import CurrentUser
 

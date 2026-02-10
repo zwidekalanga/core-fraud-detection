@@ -90,6 +90,19 @@ class TestAlertFilter:
         assert "risk_score" not in where_clause
         assert "decision" not in where_clause
 
+    def test_apply_account_number_adds_join(self):
+        query = select(FraudAlert)
+        query = AlertFilter.apply_account_number(query, "1234567890")
+        compiled = _compile(query)
+        assert "JOIN" in compiled
+        assert "account_number" in compiled
+
+    def test_apply_account_number_noop_when_none(self):
+        query = select(FraudAlert)
+        result = AlertFilter.apply_account_number(query, None)
+        compiled = _compile(result)
+        assert "JOIN" not in compiled
+
 
 # =========================================================================
 # RuleFilter
@@ -136,3 +149,41 @@ class TestRuleFilter:
         compiled = _compile(query)
         assert "ORDER BY" in compiled
         assert "category" in compiled
+
+    def test_apply_temporal_bounds_when_enabled(self):
+        f = RuleFilter(enabled=True)
+        query = select(FraudRule)
+        query = f.apply_temporal_bounds(query)
+        compiled = _compile(query)
+        assert "effective_from" in compiled
+        assert "effective_to" in compiled
+
+    def test_apply_temporal_bounds_noop_when_not_enabled(self):
+        f = RuleFilter(enabled=False)
+        query = select(FraudRule)
+        result = f.apply_temporal_bounds(query)
+        compiled = _compile(result)
+        assert "WHERE" not in compiled
+
+    def test_apply_temporal_bounds_noop_when_none(self):
+        f = RuleFilter()
+        query = select(FraudRule)
+        result = f.apply_temporal_bounds(query)
+        compiled = _compile(result)
+        assert "WHERE" not in compiled
+
+    def test_apply_default_ordering_when_no_order_by(self):
+        f = RuleFilter()
+        query = select(FraudRule)
+        result = f.apply_default_ordering(query)
+        compiled = _compile(result)
+        assert "ORDER BY" in compiled
+        assert "category" in compiled
+
+    def test_apply_default_ordering_noop_when_order_by_set(self):
+        f = RuleFilter(order_by=["-code"])
+        query = select(FraudRule)
+        before = _compile(query)
+        result = f.apply_default_ordering(query)
+        after = _compile(result)
+        assert before == after

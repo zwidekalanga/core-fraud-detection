@@ -1,11 +1,12 @@
 """Service layer for fraud alert management."""
 
 from datetime import UTC, datetime
-from math import ceil
 
+from sqlalchemy import Select
+
+from app.filters.alert import AlertFilter
 from app.repositories.alert_repository import AlertRepository
 from app.schemas.alert import (
-    AlertListResponse,
     AlertResponse,
     AlertReviewRequest,
     AlertReviewResponse,
@@ -23,27 +24,22 @@ class AlertService:
     def __init__(self, repo: AlertRepository):
         self._repo = repo
 
+    @property
+    def session(self):
+        """Expose the repo's session for sqlalchemy_paginate."""
+        return self._repo.session
+
     @staticmethod
     def _build_response(alert) -> AlertResponse:
         return AlertResponse.model_validate(alert)
 
-    async def list_alerts(
+    def get_list_query(
         self,
-        filters,
-        page: int = 1,
-        size: int = 50,
+        filters: AlertFilter,
         account_number: str | None = None,
-    ) -> AlertListResponse:
-        alerts, total = await self._repo.get_all(
-            filters, page=page, size=size, account_number=account_number
-        )
-        return AlertListResponse(
-            items=[self._build_response(a) for a in alerts],
-            total=total,
-            page=page,
-            size=size,
-            pages=ceil(total / size) if size > 0 else 0,
-        )
+    ) -> Select:
+        """Return a filtered query — pagination handled by the library."""
+        return self._repo.get_list_query(filters, account_number=account_number)
 
     async def get_alert(self, alert_id: str) -> AlertResponse | None:
         alert = await self._repo.get_by_id(alert_id)

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.pylitmus_adapter import PylitmusAdapter
 from app.config import Settings
 from app.core.feature_service import FeatureService
-from app.core.fraud_detector import EvaluationError, FraudDetector
+from app.core.fraud_detector import FraudDetector
 from app.models.alert import AlertStatus, Decision, FraudAlert
 from app.repositories.alert_repository import AlertRepository
 from app.repositories.config_repository import ConfigRepository

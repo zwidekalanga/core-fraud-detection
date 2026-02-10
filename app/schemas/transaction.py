@@ -38,8 +38,8 @@ class TransactionEvaluateRequest(BaseModel):
         if v is not None:
             try:
                 ipaddress.ip_address(v)
-            except ValueError:
-                raise ValueError(f"'{v}' is not a valid IPv4 or IPv6 address")
+            except ValueError as e:
+                raise ValueError(f"'{v}' is not a valid IPv4 or IPv6 address") from e
         return v
 
 

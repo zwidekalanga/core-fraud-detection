@@ -59,25 +59,25 @@ class TransactionRepository:
         Uses ``ON CONFLICT DO UPDATE ... RETURNING`` to fetch the row in a
         single round-trip instead of INSERT + SELECT.
         """
-        values = dict(
-            external_id=txn_data.external_id,
-            customer_id=txn_data.customer_id,
-            account_id=txn_data.account_id,
-            account_number=txn_data.account_number,
-            amount=txn_data.amount,
-            currency=txn_data.currency,
-            transaction_type=txn_data.transaction_type,
-            channel=txn_data.channel,
-            merchant_id=txn_data.merchant_id,
-            merchant_name=txn_data.merchant_name,
-            merchant_category=txn_data.merchant_category,
-            location_country=txn_data.location_country,
-            location_city=txn_data.location_city,
-            device_fingerprint=txn_data.device_fingerprint,
-            ip_address=txn_data.ip_address,
-            transaction_time=txn_data.transaction_time or datetime.now(UTC),
-            extra_data=txn_data.extra_data,
-        )
+        values = {
+            "external_id": txn_data.external_id,
+            "customer_id": txn_data.customer_id,
+            "account_id": txn_data.account_id,
+            "account_number": txn_data.account_number,
+            "amount": txn_data.amount,
+            "currency": txn_data.currency,
+            "transaction_type": txn_data.transaction_type,
+            "channel": txn_data.channel,
+            "merchant_id": txn_data.merchant_id,
+            "merchant_name": txn_data.merchant_name,
+            "merchant_category": txn_data.merchant_category,
+            "location_country": txn_data.location_country,
+            "location_city": txn_data.location_city,
+            "device_fingerprint": txn_data.device_fingerprint,
+            "ip_address": txn_data.ip_address,
+            "transaction_time": txn_data.transaction_time or datetime.now(UTC),
+            "extra_data": txn_data.extra_data,
+        }
 
         stmt = (
             insert(Transaction)

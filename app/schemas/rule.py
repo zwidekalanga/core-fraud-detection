@@ -111,13 +111,3 @@ class RuleResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class RuleListResponse(BaseModel):
-    """Schema for paginated rule list."""
-
-    items: list[RuleResponse]
-    total: int
-    page: int
-    size: int
-    pages: int
