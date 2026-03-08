@@ -159,6 +159,8 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
+    "ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited:RuntimeWarning",
+    "ignore:jwt_secret_key is shorter than 32 characters:UserWarning",
 ]
 
 [tool.coverage.run]

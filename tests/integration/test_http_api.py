@@ -40,21 +40,21 @@ def _make_page(items, total=None, page=1, size=50):
 def _mock_rule_service() -> RuleService:
     """Create a RuleService with a fully mocked repository."""
     svc = RuleService.__new__(RuleService)
-    svc._repo = AsyncMock()
+    svc._repo = MagicMock()
     return svc
 
 
 def _mock_alert_service() -> AlertService:
     """Create an AlertService with a fully mocked repository."""
     svc = AlertService.__new__(AlertService)
-    svc._repo = AsyncMock()
+    svc._repo = MagicMock()
     return svc
 
 
 def _mock_config_service() -> ConfigService:
     """Create a ConfigService with a fully mocked repository."""
     svc = ConfigService.__new__(ConfigService)
-    svc._repo = AsyncMock()
+    svc._repo = MagicMock()
     return svc
 
 
