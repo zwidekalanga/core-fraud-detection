@@ -17,7 +17,7 @@ async def health_check() -> dict[str, str]:
     }
 
 
-@router.get("/ready")
+@router.get("/ready", response_model=None)
 async def readiness_check(request: Request) -> dict[str, str | dict[str, str]] | JSONResponse:
     """Readiness check — can the service handle traffic?"""
     checks: dict[str, str] = {}
