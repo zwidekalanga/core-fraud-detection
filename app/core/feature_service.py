@@ -86,7 +86,11 @@ class FeatureService:
 
             if cached:
                 data = json.loads(cached)
-                return int(data.get("risk_score", 0))
+                try:
+                    return int(data.get("risk_score", 0))
+                except (ValueError, TypeError):
+                    logger.warning("Non-numeric merchant risk_score for merchant=%s", merchant_id)
+                    return 0
 
             return 0
 
