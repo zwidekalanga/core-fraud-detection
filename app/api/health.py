@@ -1,10 +1,14 @@
 """Health check endpoints."""
 
+from importlib.metadata import version
+
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 router = APIRouter(tags=["Health"])
+
+SERVICE_VERSION = version("core-fraud-detection-service")
 
 
 @router.get("/health")
@@ -13,7 +17,7 @@ async def health_check() -> dict[str, str]:
     return {
         "status": "healthy",
         "service": "core-fraud-detection-service",
-        "version": "1.0.0",
+        "version": SERVICE_VERSION,
     }
 
 

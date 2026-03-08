@@ -1,11 +1,10 @@
 """Integration tests for authentication and authorisation.
 
-Token issuance (login/refresh) lives in core-banking.  This service only
-performs *stateless JWT validation* and role-based access control.
-These tests verify the /me endpoint, token validation, and RBAC enforcement.
+Token issuance (login/refresh) and user profile (/me) live in core-banking.
+This service only performs *stateless JWT validation* and role-based access
+control.  These tests verify RBAC enforcement on fraud-detection endpoints.
 """
 
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,7 +15,6 @@ from app.services.alert_service import AlertService
 from app.services.rule_service import RuleService
 from fastapi_pagination import Page
 from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
-from tests.helpers.token_factory import create_refresh_token
 
 pytestmark = pytest.mark.asyncio
 
@@ -41,55 +39,6 @@ def _mock_alert_service() -> AlertService:
     svc = AlertService.__new__(AlertService)
     svc._repo = AsyncMock()
     return svc
-
-
-# ======================================================================
-# GET /api/v1/auth/me — token introspection
-# ======================================================================
-
-
-class TestMeEndpoint:
-    """Tests for the /me endpoint (the only auth endpoint on this service)."""
-
-    async def test_get_me_admin(self, client):
-        headers = _make_headers("admin", "admin")
-        resp = await client.get("/api/v1/auth/me", headers=headers)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["username"] == "admin"
-        assert body["role"] == "admin"
-
-    async def test_get_me_analyst(self, client):
-        headers = _make_headers("analyst", "analyst")
-        resp = await client.get("/api/v1/auth/me", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["role"] == "analyst"
-
-    async def test_get_me_viewer(self, client):
-        headers = _make_headers("viewer", "viewer")
-        resp = await client.get("/api/v1/auth/me", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["role"] == "viewer"
-
-    async def test_get_me_without_token(self, client):
-        resp = await client.get("/api/v1/auth/me")
-        assert resp.status_code == 401
-
-    async def test_get_me_with_invalid_token(self, client):
-        headers = {"Authorization": "Bearer invalid.jwt.token"}
-        resp = await client.get("/api/v1/auth/me", headers=headers)
-        assert resp.status_code == 401
-
-    async def test_get_me_with_refresh_token_rejected(self, client):
-        """Using a refresh token (type=refresh) as an access token should fail."""
-        refresh = create_refresh_token(
-            user_id=str(uuid.uuid4()),
-            role="admin",
-            username="admin",
-        )
-        headers = {"Authorization": f"Bearer {refresh}"}
-        resp = await client.get("/api/v1/auth/me", headers=headers)
-        assert resp.status_code == 401
 
 
 # ======================================================================

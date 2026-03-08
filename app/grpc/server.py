@@ -6,18 +6,18 @@ from concurrent import futures
 from decimal import Decimal
 
 import grpc
-from grpc import aio as grpc_aio
+from grpc import aio as grpc_aio  # pyright: ignore[reportAttributeAccessIssue]
 from grpc_health.v1 import health as grpc_health
 from grpc_health.v1 import health_pb2 as health_pb2
 from grpc_health.v1 import health_pb2_grpc as health_pb2_grpc
 
 from app.config import get_settings
 from app.core.evaluation_service import FraudEvaluationService
-from app.dependencies import InfrastructureContainer
 from app.grpc.generated import (  # pyright: ignore[reportMissingImports]
     fraud_evaluation_pb2,
     fraud_evaluation_pb2_grpc,
 )
+from app.infrastructure import InfrastructureContainer
 from app.schemas.transaction import TransactionEvaluateRequest
 from app.telemetry import TracingInterceptor, init_telemetry
 

@@ -16,7 +16,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api.health import router as health_router
 from app.api.v1.router import api_router
 from app.config import get_settings
-from app.dependencies import create_engine, create_redis, create_session_factory
+from app.infrastructure import create_engine, create_redis, create_session_factory
 from app.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
 from app.rate_limit import limiter
 from app.utils.logging import setup_logging

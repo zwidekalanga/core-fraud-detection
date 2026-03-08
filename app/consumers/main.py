@@ -6,7 +6,7 @@ import sys
 
 from app.config import get_settings
 from app.consumers.transaction_consumer import TransactionConsumer
-from app.dependencies import InfrastructureContainer
+from app.infrastructure import InfrastructureContainer
 from app.utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
