@@ -83,6 +83,11 @@ dev = [
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
 
+    # Type Stubs
+    "types-protobuf>=4.25.0",
+    "grpc-stubs>=1.53.0",
+    "types-python-jose>=3.3.0",
+
     # Database Testing
     "testcontainers[postgresql,redis,kafka]>=3.7.0",
 ]
@@ -124,6 +129,29 @@ strict = true
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+exclude = ["app/grpc/generated/", "alembic/"]
+
+[[tool.mypy.overrides]]
+module = [
+    "pylitmus.*",
+    "celery.*",
+    "aiokafka.*",
+    "opentelemetry.*",
+    "grpc_health.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "app.telemetry"
+disallow_subclassing_any = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "app.grpc.*"
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+warn_return_any = false
+disable_error_code = ["attr-defined"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

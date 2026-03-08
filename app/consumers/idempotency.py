@@ -39,7 +39,7 @@ class IdempotencyService:
             True if message was already processed, False otherwise
         """
         key = self._make_key(message_type, external_id)
-        return await self.redis.exists(key) > 0
+        return bool(await self.redis.exists(key))
 
     async def mark_processed(
         self,
@@ -69,7 +69,7 @@ class IdempotencyService:
         value = await self.redis.get(key)
         if value and value != "1":
             try:
-                return json.loads(value)
+                return json.loads(value)  # type: ignore[no-any-return]
             except json.JSONDecodeError:
                 return None
         return None
@@ -150,7 +150,7 @@ class IdempotentProcessor:
 
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object) -> None:
         try:
             if exc_type is None and self.should_process and self._result is not None:
                 # Mark as processed if successful

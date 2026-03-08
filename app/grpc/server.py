@@ -108,7 +108,7 @@ class FraudEvaluationServicer(fraud_evaluation_pb2_grpc.FraudEvaluationServiceSe
                 )
 
 
-async def serve(port: int = 50051):
+async def serve(port: int = 50051) -> None:
     """Start the async gRPC server."""
     settings = get_settings()
     infra = InfrastructureContainer.from_settings(settings)

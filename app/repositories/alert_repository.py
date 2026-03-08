@@ -24,7 +24,7 @@ class AlertRepository:
         self,
         filters: AlertFilter,
         account_number: str | None = None,
-    ) -> Select:
+    ) -> Select[Any]:
         """Return a filtered + sorted query — pagination handled by the library."""
         query = filters.filter(select(FraudAlert).options(selectinload(FraudAlert.transaction)))
         query = AlertFilter.apply_account_number(query, account_number)

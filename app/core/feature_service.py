@@ -86,7 +86,7 @@ class FeatureService:
 
             if cached:
                 data = json.loads(cached)
-                return data.get("risk_score", 0)
+                return int(data.get("risk_score", 0))
 
             return 0
 

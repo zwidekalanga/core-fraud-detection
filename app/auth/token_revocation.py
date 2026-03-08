@@ -25,4 +25,4 @@ async def revoke_token(redis: Redis, jti: str, expires_in_seconds: int) -> None:
 
 async def is_token_revoked(redis: Redis, jti: str) -> bool:
     """Return ``True`` if *jti* has been revoked."""
-    return await redis.exists(f"{_DENY_PREFIX}{jti}") > 0
+    return bool(await redis.exists(f"{_DENY_PREFIX}{jti}"))

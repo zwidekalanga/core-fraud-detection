@@ -18,7 +18,7 @@ async def health_check() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def readiness_check(request: Request):
+async def readiness_check(request: Request) -> dict[str, str | dict[str, str]] | JSONResponse:
     """Readiness check — can the service handle traffic?"""
     checks: dict[str, str] = {}
 
@@ -49,6 +49,6 @@ async def readiness_check(request: Request):
 
 
 @router.get("/api/v1/ping")
-async def ping() -> dict:
+async def ping() -> dict[str, str]:
     """Simple ping endpoint for debugging."""
     return {"ping": "pong"}

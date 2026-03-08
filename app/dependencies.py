@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from redis.asyncio import Redis
@@ -32,11 +32,11 @@ def _register_pool_events(engine: AsyncEngine) -> None:
         return
 
     @event.listens_for(pool, "checkout")
-    def _on_checkout(_dbapi_conn, _conn_record, _conn_proxy):
+    def _on_checkout(_dbapi_conn: Any, _conn_record: Any, _conn_proxy: Any) -> None:
         logger.debug("Pool checkout — size=%s checked_out=%s", pool.size(), pool.checkedout())
 
     @event.listens_for(pool, "checkin")
-    def _on_checkin(_dbapi_conn, _conn_record):
+    def _on_checkin(_dbapi_conn: Any, _conn_record: Any) -> None:
         logger.debug("Pool checkin — size=%s checked_out=%s", pool.size(), pool.checkedout())
 
 
@@ -60,7 +60,7 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 
 def create_redis(settings: Settings) -> Redis:
     """Create the async Redis client."""
-    return Redis.from_url(str(settings.redis_url), decode_responses=True)
+    return Redis.from_url(str(settings.redis_url), decode_responses=True)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

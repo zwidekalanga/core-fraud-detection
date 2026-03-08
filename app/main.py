@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
-    async def _unhandled_exception_handler(request: Request, exc: Exception):
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         # Let cancellation propagate — swallowing it breaks graceful shutdown
         if isinstance(exc, asyncio.CancelledError):
             raise

@@ -31,7 +31,7 @@ _RULE_CODE = Path(pattern=RULE_CODE_PATTERN, description="Rule code (e.g. AMT_00
 async def list_rules(
     service: RuleSvc,
     filters: RuleFilter = FilterDepends(RuleFilter),
-):
+) -> Page[RuleResponse]:
     """
     List all fraud rules with optional filtering.
 
@@ -40,7 +40,7 @@ async def list_rules(
     - **order_by**: Sort fields (e.g. ``category``, ``-code``)
     """
     query = service.get_list_query(filters)
-    return await sqlalchemy_paginate(service.session, query)
+    return await sqlalchemy_paginate(service.session, query)  # type: ignore[no-any-return]
 
 
 @router.get(

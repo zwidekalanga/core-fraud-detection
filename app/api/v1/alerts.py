@@ -46,7 +46,7 @@ async def list_alerts(
     service: AlertSvc,
     filters: AlertFilter = FilterDepends(AlertFilter),
     account_number: str | None = Query(None, description="Filter by account number"),
-):
+) -> Page[AlertResponse]:
     """
     List fraud alerts with optional filtering and sorting.
 
@@ -59,7 +59,7 @@ async def list_alerts(
     - **order_by**: Sort fields (e.g. ``-created_at``, ``risk_score``)
     """
     query = service.get_list_query(filters, account_number=account_number)
-    return await sqlalchemy_paginate(service.session, query)
+    return await sqlalchemy_paginate(service.session, query)  # type: ignore[no-any-return]
 
 
 @router.get(

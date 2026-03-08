@@ -1,5 +1,7 @@
 """Service layer for fraud rule management."""
 
+from typing import Any
+
 from sqlalchemy import Select
 
 from app.filters.rule import RuleFilter
@@ -18,11 +20,11 @@ class RuleService:
         self._repo = repo
 
     @property
-    def session(self):
+    def session(self) -> Any:
         """Expose the repo's session for sqlalchemy_paginate."""
         return self._repo.session
 
-    def get_list_query(self, filters: RuleFilter) -> Select:
+    def get_list_query(self, filters: RuleFilter) -> Select[Any]:
         """Return a filtered query — pagination handled by the library."""
         return self._repo.get_list_query(filters)
 

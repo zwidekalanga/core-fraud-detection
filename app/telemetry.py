@@ -34,7 +34,7 @@ try:
     _HAS_OTEL = True
 except ImportError:  # pragma: no cover
     _HAS_OTEL = False
-    trace = None  # type: ignore[assignment]
+    trace = None
 
 _SERVICE_NAME = "core-fraud-detection"
 _tracer: Any = None
@@ -84,7 +84,7 @@ async def aspan(name: str, attributes: dict[str, Any] | None = None) -> AsyncIte
 # ---------------------------------------------------------------------------
 
 
-class TracingInterceptor(grpc_aio.ServerInterceptor):
+class TracingInterceptor(grpc_aio.ServerInterceptor):  # type: ignore[type-arg]
     """Unary-unary gRPC server interceptor that creates a span per RPC.
 
     If OTel is not installed the interceptor still works but records no spans.

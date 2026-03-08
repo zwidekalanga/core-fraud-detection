@@ -1,6 +1,8 @@
 """Audit logging for privileged actions (M45)."""
 
 import logging
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from fastapi import Request
 
@@ -9,7 +11,7 @@ from app.auth.dependencies import CurrentUser
 logger = logging.getLogger("audit")
 
 
-def audit_logged(action: str):
+def audit_logged(action: str) -> Callable[..., Coroutine[Any, Any, None]]:
     """Dependency factory that logs privileged actions.
 
     Usage::

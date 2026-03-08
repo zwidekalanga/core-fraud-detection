@@ -1,6 +1,7 @@
 """Declarative filter for fraud alerts."""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Select
 
@@ -26,7 +27,7 @@ class AlertFilter(Filter):
         model = FraudAlert
 
     @staticmethod
-    def apply_account_number(query: Select, account_number: str | None) -> Select:
+    def apply_account_number(query: Select[Any], account_number: str | None) -> Select[Any]:
         """Join through Transaction to filter by account number."""
         if account_number:
             query = query.join(

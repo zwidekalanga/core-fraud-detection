@@ -1,6 +1,7 @@
 """Declarative filter for fraud rules."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Select
 
@@ -18,7 +19,7 @@ class RuleFilter(Filter):
     class Constants(Filter.Constants):
         model = FraudRule
 
-    def apply_temporal_bounds(self, query: Select) -> Select:
+    def apply_temporal_bounds(self, query: Select[Any]) -> Select[Any]:
         """When enabled=True, also enforce effective_from/to date bounds."""
         if self.enabled is True:
             now = datetime.now(UTC)
@@ -28,7 +29,7 @@ class RuleFilter(Filter):
             )
         return query
 
-    def apply_default_ordering(self, query: Select) -> Select:
+    def apply_default_ordering(self, query: Select[Any]) -> Select[Any]:
         """Apply category+code ordering when no explicit order_by is set."""
         if not self.order_by:
             query = query.order_by(FraudRule.category, FraudRule.code)

@@ -1,6 +1,7 @@
 """Repository for fraud rule data access."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
@@ -25,7 +26,7 @@ class RuleRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    def get_list_query(self, filters: RuleFilter) -> Select:
+    def get_list_query(self, filters: RuleFilter) -> Select[Any]:
         """Return a filtered + sorted query — pagination handled by the library."""
         query = filters.filter(select(FraudRule))
         query = filters.apply_temporal_bounds(query)

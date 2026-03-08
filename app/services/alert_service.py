@@ -1,6 +1,7 @@
 """Service layer for fraud alert management."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Select
 
@@ -25,19 +26,19 @@ class AlertService:
         self._repo = repo
 
     @property
-    def session(self):
+    def session(self) -> Any:
         """Expose the repo's session for sqlalchemy_paginate."""
         return self._repo.session
 
     @staticmethod
-    def _build_response(alert) -> AlertResponse:
+    def _build_response(alert: Any) -> AlertResponse:
         return AlertResponse.model_validate(alert)
 
     def get_list_query(
         self,
         filters: AlertFilter,
         account_number: str | None = None,
-    ) -> Select:
+    ) -> Select[Any]:
         """Return a filtered query — pagination handled by the library."""
         return self._repo.get_list_query(filters, account_number=account_number)
 

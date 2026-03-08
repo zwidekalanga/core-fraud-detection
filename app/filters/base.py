@@ -7,6 +7,8 @@ Since we always use the modern ``select()`` API, the runtime return is always
 repositories and pagination calls stay clean.
 """
 
+from typing import Any
+
 from fastapi_filter.contrib.sqlalchemy import Filter as _UntypedFilter
 from sqlalchemy import Select
 
@@ -14,8 +16,8 @@ from sqlalchemy import Select
 class Filter(_UntypedFilter):
     """Typed shim over fastapi-filter's ``Filter``."""
 
-    def filter(self, query: Select) -> Select:  # type: ignore[override]
-        return super().filter(query)  # type: ignore[return-value]
+    def filter(self, query: Select[Any]) -> Select[Any]:  # type: ignore[override]
+        return super().filter(query)  # type: ignore[no-any-return]
 
-    def sort(self, query: Select) -> Select:  # type: ignore[override]
-        return super().sort(query)  # type: ignore[return-value]
+    def sort(self, query: Select[Any]) -> Select[Any]:  # type: ignore[override]
+        return super().sort(query)  # type: ignore[no-any-return]

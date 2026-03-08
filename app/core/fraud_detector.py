@@ -46,7 +46,7 @@ class FraudDetector:
         self._rules: list[Any] = []
         self._engine = self._create_engine([])
 
-    def _create_engine(self, rules: list[Any]):
+    def _create_engine(self, rules: list[Any]) -> Any:
         """Create pylitmus engine with decision tiers and RETE algorithm."""
         return create_engine(
             rules=rules,
