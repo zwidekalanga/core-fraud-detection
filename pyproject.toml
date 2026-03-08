@@ -2,7 +2,6 @@
 name = "core-fraud-detection-service"
 version = "1.0.0"
 description = "Fraud Detection Service for Capitec SWE Assessment"
-readme = "README.md"
 requires-python = ">=3.12"
 authors = [
     { name = "Cyril Mandla Nxumalo" }
