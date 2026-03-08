@@ -182,13 +182,12 @@ class TestGetMerchantRisk:
         assert score == 0
 
     async def test_returns_default_for_non_numeric_risk(self, feature_service, mock_redis):
-        """Non-numeric risk_score value falls back to dict.get default (0)."""
+        """Non-numeric risk_score value falls back to default 0."""
         mock_redis.get.return_value = json.dumps({"risk_score": "high"})
 
         score = await feature_service.get_merchant_risk("MERCH-STR")
 
-        # dict.get returns the string; caller responsibility to validate
-        assert score == "high"
+        assert score == 0
 
 
 class TestEnrichTransaction:
