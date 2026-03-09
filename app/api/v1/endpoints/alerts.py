@@ -13,14 +13,15 @@ If this service is ever exposed to external consumers or multi-tenant
 access, alerts MUST be scoped by organisation / tenant ID.
 """
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, Security, status
 from fastapi_filter import FilterDepends
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 
-from app.auth.dependencies import CurrentUser, require_role
+from app.dependencies import get_current_user
 from app.filters.alert import AlertFilter
 from app.providers import AlertSvc
 from app.rate_limit import limiter
@@ -31,6 +32,7 @@ from app.schemas.alert import (
     AlertStatsResponse,
     DailyVolumeResponse,
 )
+from app.schemas.auth import TokenUser
 from app.utils.audit import audit_logged
 
 router = APIRouter()
@@ -39,13 +41,11 @@ router = APIRouter()
 @router.get(
     "",
     response_model=Page[AlertResponse],
-    response_model_exclude_none=True,
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def list_alerts(
     service: AlertSvc,
-    filters: AlertFilter = FilterDepends(AlertFilter),
-    account_number: str | None = Query(None, description="Filter by account number"),
+    filters: Annotated[AlertFilter, FilterDepends(AlertFilter)],
 ) -> Page[AlertResponse]:
     """
     List fraud alerts with optional filtering and sorting.
@@ -58,14 +58,14 @@ async def list_alerts(
     - **created_at__gte / created_at__lte**: Filter by creation date range
     - **order_by**: Sort fields (e.g. ``-created_at``, ``risk_score``)
     """
-    query = service.get_list_query(filters, account_number=account_number)
-    return await sqlalchemy_paginate(service.session, query)  # type: ignore[no-any-return]
+    query = service.get_list_query(filters)
+    return await sqlalchemy_paginate(service.session, query)
 
 
 @router.get(
     "/stats/summary",
     response_model=AlertStatsResponse,
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def get_alert_stats(service: AlertSvc, response: Response) -> AlertStatsResponse:
     """Get alert statistics summary."""
@@ -76,12 +76,12 @@ async def get_alert_stats(service: AlertSvc, response: Response) -> AlertStatsRe
 @router.get(
     "/stats/daily-volume",
     response_model=DailyVolumeResponse,
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def get_daily_volume(
     service: AlertSvc,
     response: Response,
-    days: int = Query(7, ge=1, le=90),
+    days: Annotated[int, Query(ge=1, le=90)] = 7,
 ) -> DailyVolumeResponse:
     """Get alert counts per day for the last N days."""
     response.headers["Cache-Control"] = "private, max-age=30"
@@ -91,8 +91,7 @@ async def get_daily_volume(
 @router.get(
     "/{alert_id}",
     response_model=AlertResponse,
-    response_model_exclude_none=True,
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def get_alert(
     alert_id: UUID,
@@ -118,9 +117,8 @@ async def review_alert(
     request: Request,  # noqa: ARG001  (required by slowapi limiter)
     alert_id: UUID,
     review_data: AlertReviewRequest,
-    current_user: CurrentUser,
+    current_user: Annotated[TokenUser, Security(get_current_user, scopes=["admin", "analyst"])],
     service: AlertSvc,
-    _: None = Depends(require_role("admin", "analyst")),
 ) -> AlertReviewResponse:
     """
     Review and update an alert's status.

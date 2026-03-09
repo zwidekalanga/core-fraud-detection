@@ -8,12 +8,12 @@ control.  These tests verify RBAC enforcement on fraud-detection endpoints.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi_pagination import Page
 
 from app.main import app
 from app.providers import get_alert_service, get_rule_service
 from app.services.alert_service import AlertService
 from app.services.rule_service import RuleService
-from fastapi_pagination import Page
 from tests.conftest import _auth_headers, _make_rule_model, make_rule_payload
 
 pytestmark = pytest.mark.asyncio
@@ -49,10 +49,12 @@ def _mock_alert_service() -> AlertService:
 class TestRBACEnforcement:
     """Tests that endpoints enforce correct role-based permissions."""
 
-    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_viewer_can_list_alerts(self, mock_paginate, client):
         """Viewers should be able to read alerts."""
-        mock_paginate.return_value = Page(items=[], total=0, page=1, size=50, pages=0)
+        mock_paginate.return_value = Page.model_validate(
+            {"items": [], "total": 0, "page": 1, "size": 50, "pages": 0}
+        )
         headers = _make_headers("viewer", "viewer")
         svc = _mock_alert_service()
         app.dependency_overrides[get_alert_service] = lambda: svc
@@ -62,10 +64,12 @@ class TestRBACEnforcement:
             app.dependency_overrides.pop(get_alert_service, None)
         assert resp.status_code == 200
 
-    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.rules.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_viewer_can_list_rules(self, mock_paginate, client):
         """Viewers should be able to read rules."""
-        mock_paginate.return_value = Page(items=[], total=0, page=1, size=50, pages=0)
+        mock_paginate.return_value = Page.model_validate(
+            {"items": [], "total": 0, "page": 1, "size": 50, "pages": 0}
+        )
         headers = _make_headers("viewer", "viewer")
         svc = _mock_rule_service()
         app.dependency_overrides[get_rule_service] = lambda: svc

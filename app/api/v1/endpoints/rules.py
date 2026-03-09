@@ -1,12 +1,14 @@
 """Rules API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Security, status
 from fastapi_filter import FilterDepends
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 
-from app.auth.dependencies import require_role
 from app.constants import RULE_CODE_PATTERN
+from app.dependencies import get_current_user
 from app.filters.rule import RuleFilter
 from app.providers import RuleSvc
 from app.repositories.rule_repository import DuplicateRuleError
@@ -26,11 +28,11 @@ _RULE_CODE = Path(pattern=RULE_CODE_PATTERN, description="Rule code (e.g. AMT_00
 @router.get(
     "",
     response_model=Page[RuleResponse],
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def list_rules(
     service: RuleSvc,
-    filters: RuleFilter = FilterDepends(RuleFilter),
+    filters: Annotated[RuleFilter, FilterDepends(RuleFilter)],
 ) -> Page[RuleResponse]:
     """
     List all fraud rules with optional filtering.
@@ -46,11 +48,11 @@ async def list_rules(
 @router.get(
     "/{code}",
     response_model=RuleResponse,
-    dependencies=[Depends(require_role("admin", "analyst", "viewer"))],
+    dependencies=[Security(get_current_user, scopes=["admin", "analyst", "viewer"])],
 )
 async def get_rule(
     service: RuleSvc,
-    code: str = _RULE_CODE,
+    code: Annotated[str, _RULE_CODE],
 ) -> RuleResponse:
     """Get a specific rule by code."""
     result = await service.get_rule(code)
@@ -66,7 +68,10 @@ async def get_rule(
     "",
     response_model=RuleResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_role("admin")), Depends(audit_logged("create_rule"))],
+    dependencies=[
+        Security(get_current_user, scopes=["admin"]),
+        Depends(audit_logged("create_rule")),
+    ],
 )
 async def create_rule(
     rule_data: RuleCreate,
@@ -85,11 +90,14 @@ async def create_rule(
 @router.put(
     "/{code}",
     response_model=RuleResponse,
-    dependencies=[Depends(require_role("admin")), Depends(audit_logged("update_rule"))],
+    dependencies=[
+        Security(get_current_user, scopes=["admin"]),
+        Depends(audit_logged("update_rule")),
+    ],
 )
 async def update_rule(
     service: RuleSvc,
-    code: str = _RULE_CODE,
+    code: Annotated[str, _RULE_CODE],
     *,
     rule_data: RuleUpdate,
 ) -> RuleResponse:
@@ -106,11 +114,14 @@ async def update_rule(
 @router.delete(
     "/{code}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_role("admin")), Depends(audit_logged("delete_rule"))],
+    dependencies=[
+        Security(get_current_user, scopes=["admin"]),
+        Depends(audit_logged("delete_rule")),
+    ],
 )
 async def delete_rule(
     service: RuleSvc,
-    code: str = _RULE_CODE,
+    code: Annotated[str, _RULE_CODE],
 ) -> None:
     """Soft delete a rule (disable it)."""
     success = await service.delete_rule(code)
@@ -124,11 +135,14 @@ async def delete_rule(
 @router.post(
     "/{code}/toggle",
     response_model=RuleResponse,
-    dependencies=[Depends(require_role("admin")), Depends(audit_logged("toggle_rule"))],
+    dependencies=[
+        Security(get_current_user, scopes=["admin"]),
+        Depends(audit_logged("toggle_rule")),
+    ],
 )
 async def toggle_rule(
     service: RuleSvc,
-    code: str = _RULE_CODE,
+    code: Annotated[str, _RULE_CODE],
 ) -> RuleResponse:
     """Toggle a rule's enabled state."""
     result = await service.toggle_rule(code)

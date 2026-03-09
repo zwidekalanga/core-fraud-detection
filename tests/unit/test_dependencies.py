@@ -1,10 +1,11 @@
-"""Unit tests for auth/dependencies.py — stateless JWT token validation and RBAC."""
+"""Unit tests for dependencies.py — stateless JWT token validation and RBAC."""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.security import SecurityScopes
 from jose import jwt
 
 from app.config import get_settings
@@ -14,6 +15,11 @@ from tests.helpers.token_factory import create_access_token, create_refresh_toke
 def _fake_request():
     """Return a minimal Request-like object with no Redis (deny-list skipped)."""
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None)))
+
+
+def _no_scopes():
+    """SecurityScopes with no required scopes (any authenticated user)."""
+    return SecurityScopes(scopes=[])
 
 
 class TestTokenUser:
@@ -54,10 +60,10 @@ class TestGetCurrentUser:
         return get_settings()
 
     async def test_valid_access_token_returns_token_user(self, settings):  # noqa: ARG002
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         token = create_access_token("user-abc", "analyst", username="analyst", email="a@test.com")
-        user = await get_current_user(_fake_request(), token)
+        user = await get_current_user(_no_scopes(), _fake_request(), token)
 
         assert user.id == "user-abc"
         assert user.username == "analyst"
@@ -66,11 +72,11 @@ class TestGetCurrentUser:
 
     async def test_valid_token_without_username_defaults_empty(self, settings):  # noqa: ARG002
         """Tokens issued before migration may lack username/email claims."""
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         # Create a token without username/email (old format)
         token = create_access_token("user-old", "viewer")
-        user = await get_current_user(_fake_request(), token)
+        user = await get_current_user(_no_scopes(), _fake_request(), token)
 
         assert user.id == "user-old"
         assert user.role == "viewer"
@@ -78,7 +84,7 @@ class TestGetCurrentUser:
         assert user.email == ""
 
     async def test_expired_token_raises_401(self, settings):
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         payload = {
             "sub": "user-expired",
@@ -89,38 +95,38 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), token)
+            await get_current_user(_no_scopes(), _fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_refresh_token_rejected_as_access(self, settings):  # noqa: ARG002
         """A refresh token must not be accepted by get_current_user."""
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         token = create_refresh_token("user-r", "admin")
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), token)
+            await get_current_user(_no_scopes(), _fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_tampered_token_raises_401(self, settings):  # noqa: ARG002
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         token = create_access_token("user-x", "admin")
         tampered = token[:-5] + "XXXXX"
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), tampered)
+            await get_current_user(_no_scopes(), _fake_request(), tampered)
         assert exc.value.status_code == 401
 
     async def test_invalid_token_string_raises_401(self):
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), "not.a.valid.jwt")
+            await get_current_user(_no_scopes(), _fake_request(), "not.a.valid.jwt")
         assert exc.value.status_code == 401
 
     async def test_token_missing_sub_raises_401(self, settings):
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         payload = {
             "role": "admin",
@@ -130,11 +136,11 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), token)
+            await get_current_user(_no_scopes(), _fake_request(), token)
         assert exc.value.status_code == 401
 
     async def test_token_wrong_secret_raises_401(self, settings):
-        from app.auth.dependencies import get_current_user
+        from app.dependencies import get_current_user
 
         payload = {
             "sub": "user-y",
@@ -145,41 +151,55 @@ class TestGetCurrentUser:
         token = jwt.encode(payload, "wrong-secret", algorithm=settings.jwt_algorithm)
 
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(_fake_request(), token)
+            await get_current_user(_no_scopes(), _fake_request(), token)
         assert exc.value.status_code == 401
 
 
-class TestRequireRole:
-    """Tests for the require_role dependency factory."""
+class TestScopeEnforcement:
+    """Tests for SecurityScopes-based RBAC in get_current_user."""
 
-    def _make_token_user(self, role: str = "analyst"):
-        from app.schemas.auth import TokenUser
+    async def test_matching_scope_passes(self):
+        from app.dependencies import get_current_user
 
-        return TokenUser(id="user-1", username="testuser", role=role, email="t@t.com")
+        token = create_access_token("user-1", "analyst", username="analyst")
+        scopes = SecurityScopes(scopes=["admin", "analyst"])
+        user = await get_current_user(scopes, _fake_request(), token)
+        assert user.id == "user-1"
 
-    async def test_matching_role_passes(self):
-        from app.auth.dependencies import require_role
+    async def test_non_matching_scope_raises_403(self):
+        from app.dependencies import get_current_user
 
-        checker = require_role("admin", "analyst")
-        user = self._make_token_user("analyst")
-        result = await checker(user)
-        assert result.id == "user-1"
-
-    async def test_non_matching_role_raises_403(self):
-        from app.auth.dependencies import require_role
-
-        checker = require_role("admin")
-        user = self._make_token_user("viewer")
+        token = create_access_token("user-1", "viewer", username="viewer")
+        scopes = SecurityScopes(scopes=["admin"])
 
         with pytest.raises(HTTPException) as exc:
-            await checker(user)
+            await get_current_user(scopes, _fake_request(), token)
         assert exc.value.status_code == 403
+        assert "Insufficient permissions" in exc.value.detail
 
-    async def test_multiple_allowed_roles(self):
-        from app.auth.dependencies import require_role
+    async def test_no_scopes_accepts_any_role(self):
+        from app.dependencies import get_current_user
 
-        checker = require_role("admin", "analyst", "viewer")
+        token = create_access_token("user-1", "viewer", username="viewer")
+        scopes = SecurityScopes(scopes=[])
+        user = await get_current_user(scopes, _fake_request(), token)
+        assert user.role == "viewer"
+
+    async def test_all_roles_accepted_when_listed(self):
+        from app.dependencies import get_current_user
+
+        scopes = SecurityScopes(scopes=["admin", "analyst", "viewer"])
         for role in ("admin", "analyst", "viewer"):
-            user = self._make_token_user(role)
-            result = await checker(user)
-            assert result.role == role
+            token = create_access_token(f"user-{role}", role, username=role)
+            user = await get_current_user(scopes, _fake_request(), token)
+            assert user.role == role
+
+    async def test_www_authenticate_includes_scopes(self):
+        from app.dependencies import get_current_user
+
+        token = create_access_token("user-1", "viewer", username="viewer")
+        scopes = SecurityScopes(scopes=["admin", "analyst"])
+
+        with pytest.raises(HTTPException) as exc:
+            await get_current_user(scopes, _fake_request(), token)
+        assert 'scope="admin analyst"' in exc.value.headers["WWW-Authenticate"]

@@ -34,13 +34,9 @@ class AlertService:
     def _build_response(alert: Any) -> AlertResponse:
         return AlertResponse.model_validate(alert)
 
-    def get_list_query(
-        self,
-        filters: AlertFilter,
-        account_number: str | None = None,
-    ) -> Select[Any]:
+    def get_list_query(self, filters: AlertFilter) -> Select[Any]:
         """Return a filtered query — pagination handled by the library."""
-        return self._repo.get_list_query(filters, account_number=account_number)
+        return self._repo.get_list_query(filters)
 
     async def get_alert(self, alert_id: str) -> AlertResponse | None:
         alert = await self._repo.get_by_id(alert_id)

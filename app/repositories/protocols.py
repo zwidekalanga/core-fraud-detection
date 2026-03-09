@@ -45,7 +45,6 @@ class AlertRepositoryProtocol(Protocol):
         filters: AlertFilter,
         page: int = 1,
         size: int = 50,
-        account_number: str | None = None,
     ) -> tuple[list[FraudAlert], int]: ...
 
     async def get_by_id(self, alert_id: str) -> FraudAlert | None: ...

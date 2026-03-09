@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Application
@@ -51,6 +52,7 @@ class Settings(BaseSettings):
         description="JWT signing secret. MUST be set via JWT_SECRET_KEY env var.",
     )
     jwt_algorithm: str = "HS256"
+    jwt_token_url: str = "http://localhost:8001/api/v1/auth/login"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_minutes: int = 1440  # 24 hours
 

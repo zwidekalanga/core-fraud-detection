@@ -60,7 +60,10 @@ def postgres_container():
     for performance. Each test uses its own transaction that is rolled back.
     """
     # Check Docker is available
-    result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
+    try:
+        result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
+    except FileNotFoundError:
+        pytest.skip("Docker is not installed")
     if result.returncode != 0:
         pytest.skip("Docker is not available")
 

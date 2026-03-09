@@ -2,11 +2,12 @@
 
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Request
+from fastapi import Depends, Request
 
-from app.auth.dependencies import CurrentUser
+from app.dependencies import get_current_user
+from app.schemas.auth import TokenUser
 
 logger = logging.getLogger("audit")
 
@@ -19,7 +20,7 @@ def audit_logged(action: str) -> Callable[..., Coroutine[Any, Any, None]]:
         @router.post("/rules", dependencies=[Depends(audit_logged("create_rule"))])
     """
 
-    async def _log(request: Request, current_user: CurrentUser) -> None:
+    async def _log(request: Request, current_user: Annotated[TokenUser, Depends(get_current_user)]) -> None:
         client_ip = request.client.host if request.client else "unknown"
         request_id = getattr(request.state, "request_id", "n/a")
         logger.info(

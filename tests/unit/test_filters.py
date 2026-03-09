@@ -90,17 +90,17 @@ class TestAlertFilter:
         assert "risk_score" not in where_clause
         assert "decision" not in where_clause
 
-    def test_apply_account_number_adds_join(self):
-        query = select(FraudAlert)
-        query = AlertFilter.apply_account_number(query, "1234567890")
+    def test_filter_by_account_number_adds_join(self):
+        f = AlertFilter(account_number="1234567890")
+        query = f.filter(select(FraudAlert))
         compiled = _compile(query)
         assert "JOIN" in compiled
         assert "account_number" in compiled
 
-    def test_apply_account_number_noop_when_none(self):
-        query = select(FraudAlert)
-        result = AlertFilter.apply_account_number(query, None)
-        compiled = _compile(result)
+    def test_filter_without_account_number_no_join(self):
+        f = AlertFilter()
+        query = f.filter(select(FraudAlert))
+        compiled = _compile(query)
         assert "JOIN" not in compiled
 
 

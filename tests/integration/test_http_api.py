@@ -93,7 +93,7 @@ class TestHealthEndpoints:
 class TestRulesAPI:
     """Test fraud rule management endpoints (service layer mocked via DI overrides)."""
 
-    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.rules.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_list_rules(self, mock_paginate, admin_client):
         rules = [_make_rule_model(code="AMT_001"), _make_rule_model(code="VEL_002")]
         mock_paginate.return_value = _make_page(rules, total=2)
@@ -109,7 +109,7 @@ class TestRulesAPI:
         assert body["total"] == 2
         assert "page" in body
 
-    @patch("app.api.v1.rules.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.rules.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_list_rules_with_filter(self, mock_paginate, admin_client):
         rule = _make_rule_model(enabled=True)
         mock_paginate.return_value = _make_page([rule], total=1)
@@ -235,7 +235,7 @@ class TestRulesAPI:
 class TestAlertsAPI:
     """Test fraud alert endpoints (service layer mocked via DI overrides)."""
 
-    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_list_alerts(self, mock_paginate, admin_client):
         alerts = [_make_alert_model(), _make_alert_model()]
         mock_paginate.return_value = _make_page(alerts, total=2)
@@ -250,7 +250,7 @@ class TestAlertsAPI:
         assert "items" in body
         assert body["total"] == 2
 
-    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_list_alerts_pagination(self, mock_paginate, admin_client):
         mock_paginate.return_value = _make_page([], total=0, page=1, size=5)
         svc = _mock_alert_service()
@@ -264,7 +264,7 @@ class TestAlertsAPI:
         assert body["page"] == 1
         assert body["size"] == 5
 
-    @patch("app.api.v1.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
+    @patch("app.api.v1.endpoints.alerts.sqlalchemy_paginate", new_callable=AsyncMock)
     async def test_list_alerts_filter_by_status(self, mock_paginate, admin_client):
         mock_paginate.return_value = _make_page([], total=0)
         svc = _mock_alert_service()
